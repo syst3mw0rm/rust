@@ -77,6 +77,7 @@ pub mod middle {
     pub mod graph;
     pub mod cfg;
     pub mod dead;
+    pub mod dxr;
 }
 
 pub mod front {
