@@ -339,9 +339,11 @@ pub fn phase_3_run_analysis_passes(sess: Session,
 
 pub fn phase_dxr(sess: Session,
                  crate: &ast::Crate,
-                 analysis: &CrateAnalysis) {
+                 analysis: &CrateAnalysis,
+                 odir: &Option<Path>,
+                 src_name: @str) {
     time(sess.time_passes(), "dxr output", crate, |crate|
-         middle::dxr::process_crate(sess, crate, analysis));
+         middle::dxr::process_crate(sess, crate, analysis, odir, src_name));
 }
 
 pub struct CrateTranslation {
@@ -439,8 +441,11 @@ pub fn phase_6_link_output(sess: Session,
 }
 
 pub fn stop_after_phase_3(sess: Session) -> bool {
-    debug!("invoked with --no-trans, returning early from compile_input");
-    return true;
+   if sess.opts.no_trans {
+        debug!("invoked with --no-trans, returning early from compile_input");
+        return true;
+    }
+    return false;
 }
 
 pub fn stop_after_phase_1(sess: Session) -> bool {
@@ -473,7 +478,7 @@ pub fn compile_input(sess: Session, cfg: ast::CrateConfig, input: &input,
         let outputs = build_output_filenames(input, outdir, output,
                                              expanded_crate.attrs, sess);
         let analysis = phase_3_run_analysis_passes(sess, &expanded_crate);
-        phase_dxr(sess, &expanded_crate, &analysis);
+        phase_dxr(sess, &expanded_crate, &analysis, outdir, source_name(input));
         if stop_after_phase_3(sess) { return; }
         let trans = phase_4_translate_to_llvm(sess, expanded_crate,
                                               &analysis, outputs);
