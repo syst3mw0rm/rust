@@ -343,7 +343,7 @@ pub fn phase_dxr(sess: Session,
                  odir: &Option<Path>,
                  src_name: @str) {
     time(sess.time_passes(), "dxr output", crate, |crate|
-         middle::dxr::process_crate(sess, crate, analysis, odir, src_name));
+         middle::dxr::process_crate(sess, crate, analysis, odir, src_name.to_owned()));
 }
 
 pub struct CrateTranslation {
