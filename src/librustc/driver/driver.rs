@@ -342,6 +342,9 @@ pub fn phase_dxr(sess: Session,
                  analysis: &CrateAnalysis,
                  odir: &Option<Path>,
                  src_name: @str) {
+    if !sess.opts.save_analysis {
+        return;
+    }
     time(sess.time_passes(), "dxr output", crate, |crate|
          middle::dxr::process_crate(sess, crate, analysis, odir, src_name.to_owned()));
 }
@@ -756,6 +759,7 @@ pub fn build_session_options(binary: @str,
     let target_cpu = matches.opt_str("target-cpu").unwrap_or(~"generic");
     let target_feature = matches.opt_str("target-feature").unwrap_or(~"");
     let save_temps = matches.opt_present("save-temps");
+    let save_analysis = matches.opt_present("save-analysis");
     let opt_level = {
         if (debugging_opts & session::no_opt) != 0 {
             No
@@ -832,6 +836,7 @@ pub fn build_session_options(binary: @str,
         extra_debuginfo: extra_debuginfo,
         lint_opts: lint_opts,
         save_temps: save_temps,
+        save_analysis: save_analysis,
         output_type: output_type,
         addl_lib_search_paths: @RefCell::new(addl_lib_search_paths),
         ar: ar,
@@ -966,6 +971,9 @@ pub fn optgroups() -> ~[getopts::groups::OptGroup] {
                         "Output dependency info to <filename> after compiling", "FILENAME"),
   optflag("", "save-temps",
                         "Write intermediate files (.bc, .opt.bc, .o)
+                          in addition to normal output"),
+  optflag("", "save-analysis",
+                        "Write syntax and type analysis information
                           in addition to normal output"),
   optopt("", "sysroot",
                         "Override the system root", "PATH"),
