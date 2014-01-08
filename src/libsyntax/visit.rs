@@ -230,6 +230,7 @@ pub fn walk_item<E:Clone, V:Visitor<E>>(visitor: &mut V, item: &item, env: E) {
                   typ,
                   ref methods) => {
             visitor.visit_generics(type_parameters, env.clone());
+            //TODO it's an Option, so this is wrong
             for trait_reference in trait_references.iter() {
                 walk_trait_ref(visitor, trait_reference, env.clone())
             }

@@ -201,6 +201,11 @@ impl <'l> DxrVisitor<'l> {
                 self.extent_str(span, Some(sub_span)), id, ctor_id, name)
     }
 
+    fn trait_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str) -> ~str {
+        format!("trait,{},id,{},qualname,{}\n",
+                self.extent_str(span, Some(sub_span)), id, name)
+    }
+
     fn mod_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, parent: NodeId) -> ~str {
         format!("module,{},id,{},qualname,{},parent,{}\n",
                 self.extent_str(span, Some(sub_span)), id, name, parent)
@@ -331,6 +336,76 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
 
                 // TODO walk type params
             },
+            item_impl(ref type_parameters,
+                      ref trait_ref,
+                      typ,
+                      ref methods) => {
+                // TODO save the impl itself
+
+                match *trait_ref {
+                    Some(ref trait_ref) => {
+                        // TODO factor all this out as a method
+                        let def_map = self.analysis.ty_cx.def_map.borrow();
+                        let def = def_map.get().find(&trait_ref.ref_id);
+                        match def {
+                            Some(d) => match *d {
+                                ast::DefTrait(def_id) => if def_id.crate == 0 {
+                                    let sub_span = self.span_for_name(&trait_ref.path.span);
+                                    write!(self.out, "{}",
+                                           self.ref_str("type_ref", &trait_ref.path.span, &sub_span, def_id.node));
+                                },
+                                _ => println("found something else in trait lookup"),
+                            },
+                            None => println!("could not find trait def {}", trait_ref.ref_id),
+                        };
+                    },
+                    None => (),
+                }
+
+                self.visit_generics(type_parameters, e);
+                self.visit_ty(typ, e);
+                for method in methods.iter() {
+                    visit::walk_method_helper(self, *method, e)
+                }
+            },
+            item_trait(ref generics, ref trait_refs, ref methods) => {
+                let qualname = match *self.analysis.ty_cx.items.get(&item.id) {
+                    node_item(_, path) => path_ident_to_str(path, item.ident, get_ident_interner()),
+                    _ => ~""
+                };
+
+                match self.sub_span_after_keyword(&item.span, keywords::Trait) {
+                    Some(sub_span) => write!(self.out, "{}",
+                                             self.trait_str(&item.span,
+                                                            &sub_span,
+                                                            item.id,
+                                                            qualname)),
+                    None => println!("Could not find sub-span for trait {}", qualname),
+                }
+
+                let def_map = self.analysis.ty_cx.def_map.borrow();
+                for trait_ref in trait_refs.iter() {
+                    let def = def_map.get().find(&trait_ref.ref_id);
+                    match def {
+                        Some(d) => match *d {
+                            ast::DefTrait(def_id) => if def_id.crate == 0 {
+                                let sub_span = self.span_for_name(&trait_ref.path.span);
+                                write!(self.out, "{}",
+                                       self.ref_str("type_ref", &trait_ref.path.span, &sub_span, def_id.node));
+                            },
+                            _ => println("found something else in trait lookup"),
+                        },
+                        None => println!("could not find trait def {}", trait_ref.ref_id),
+                    };
+
+                }
+
+                // walk generics and methods
+                self.visit_generics(generics, e);
+                for method in methods.iter() {
+                    self.visit_trait_method(method, e)
+                }
+            },
             item_mod(ref m) => {
                 let qualname = match *self.analysis.ty_cx.items.get(&item.id) {
                     node_item(_, path) => path_ident_to_str(path, item.ident, get_ident_interner()),
@@ -439,12 +514,13 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 let def = def_map.get().find(&id);
                 match def {
                     Some(d) => match *d {
-                        ast::DefTy(def_id) => if def_id.crate == 0 {
+                        ast::DefTy(def_id) |
+                        ast::DefTrait(def_id) => if def_id.crate == 0 {
                             let sub_span = self.span_for_name(&t.span);
                             write!(self.out, "{}",
                                    self.ref_str("type_ref", &t.span, &sub_span, def_id.node));
                         },
-                        _ => (),
+                        _ => println!("found something else in type {}", path_to_str(path, get_ident_interner())),
                     },
                     _ => (),
                 }
