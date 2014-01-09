@@ -230,6 +230,11 @@ impl <'l> DxrVisitor<'l> {
         format!("mod_ref,{},refid,0,qualname,{}\n",
                 self.extent_str(span, Some(sub_span)), qualname)
     }
+
+    fn inherit_str(&self, base_id: NodeId, deriv_id: NodeId) -> ~str {
+        format!("inheritance,base,{},derived,{}\n",
+                base_id, deriv_id)        
+    }
 }
 
 impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
@@ -383,6 +388,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     None => println!("Could not find sub-span for trait {}", qualname),
                 }
 
+                // super-traits
                 let def_map = self.analysis.ty_cx.def_map.borrow();
                 for trait_ref in trait_refs.iter() {
                     let def = def_map.get().find(&trait_ref.ref_id);
@@ -392,6 +398,8 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                 let sub_span = self.span_for_name(&trait_ref.path.span);
                                 write!(self.out, "{}",
                                        self.ref_str("type_ref", &trait_ref.path.span, &sub_span, def_id.node));
+                                write!(self.out, "{}",
+                                       self.inherit_str(def_id.node, item.id));
                             },
                             _ => println("found something else in trait lookup"),
                         },
