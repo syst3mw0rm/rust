@@ -206,6 +206,11 @@ impl <'l> DxrVisitor<'l> {
                 self.extent_str(span, Some(sub_span)), id, name)
     }
 
+    fn impl_str(&self, span: &Span, sub_span: &Span, id: NodeId, ref_id: NodeId) -> ~str {
+        format!("impl,{},id,{},refid,{}\n",
+                self.extent_str(span, Some(sub_span)), id, ref_id)        
+    }
+
     fn mod_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, parent: NodeId) -> ~str {
         format!("module,{},id,{},qualname,{},parent,{}\n",
                 self.extent_str(span, Some(sub_span)), id, name, parent)
@@ -345,7 +350,25 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                       ref trait_ref,
                       typ,
                       ref methods) => {
-                // TODO save the impl itself
+                match typ.node {
+                    ty_path(ref path, ref bounds, id) => {
+                        let def_map = self.analysis.ty_cx.def_map.borrow();
+                        let def = def_map.get().find(&id);
+                        match def {
+                            Some(d) => match *d {
+                                ast::DefTy(def_id) =>
+                                    if def_id.crate == 0 {
+                                        let sub_span = self.span_for_name(&path.span);
+                                        write!(self.out, "{}",
+                                               self.impl_str(&path.span, &sub_span, item.id, def_id.node));
+                                    },
+                                _ => println!("found something else in impl.type {}", path_to_str(path, get_ident_interner())),
+                            },
+                            _ => println("failed to look up the def of the struct in an impl"),
+                        }
+                    },
+                    _ => println("expected a path to a struct, but got some other type"),
+                }
 
                 match *trait_ref {
                     Some(ref trait_ref) => {
@@ -358,6 +381,8 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                     let sub_span = self.span_for_name(&trait_ref.path.span);
                                     write!(self.out, "{}",
                                            self.ref_str("type_ref", &trait_ref.path.span, &sub_span, def_id.node));
+                                    write!(self.out, "{}",
+                                           self.impl_str(&trait_ref.path.span, &sub_span, item.id, def_id.node));
                                 },
                                 _ => println("found something else in trait lookup"),
                             },
