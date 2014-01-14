@@ -869,7 +869,7 @@ pub fn process_crate(sess: Session,
                 let mut path = val.clone();
                 path.push("dxr");
                 path },
-            None() => Path::new("~/dxr-temp"),
+            None() => Path::new("dxr-temp"),
         },
     };
     

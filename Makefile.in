@@ -52,7 +52,7 @@
 #
 # Admittedly this is a little convoluted.
 
-STAGES = 0 1 2 3
+STAGES = 0 1
 
 ######################################################################
 # Residual auto-configuration
