@@ -24,7 +24,7 @@ use syntax::codemap::*;
 use syntax::diagnostic;
 use syntax::parse::lexer;
 use syntax::parse::lexer::{reader, StringReader};
-use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,is_ident,Token,EOF,EQ,COLON,LT,GT};
+use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,to_str,is_ident,Token,EOF,EQ,COLON,COMMA,RBRACE,LT,GT};
 use syntax::visit;
 use syntax::visit::Visitor;
 use syntax::print::pprust::{path_to_str,ty_to_str};
@@ -277,7 +277,17 @@ impl <'l> DxrVisitor<'l> {
                 self.extent_str(span, Some(sub_span)), id, name,
                 fn_name + "::" + name)
     }
+    fn enum_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str) -> ~str {
+        format!("enum,{},id,{},qualname,{}\n",
+                self.extent_str(span, Some(sub_span)), id, name)
+    }
 
+    fn tuple_variant_str(&self, span: &Span, id: NodeId, name: &str, qualname: &str) -> ~str {
+        format!("variant,{},id,{},name,{},qualname,{}\n",
+                self.extent_str(span, None), id, name, qualname)
+    }
+
+    fn static_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str) -> ~str {
     // value is the initialising expression of the static if it is not mut, otherwise "".
     fn static_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str, value: &str) -> ~str {
         format!("variable,{},id,{},name,{},qualname,{},value,\"{}\"\n",
@@ -642,6 +652,35 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 }
 
                 // TODO walk type params
+            },
+            item_enum(ref enum_definition, ref type_parameters) => {
+                let qualname = match *self.analysis.ty_cx.items.get(&item.id) {
+                    node_item(_, path) => path_ident_to_str(path, item.ident, get_ident_interner()),
+                    _ => ~""
+                };
+                match self.sub_span_after_keyword(&item.span, keywords::Enum) {
+                    Some(ref sub_span) => write!(self.out, "{}", self.enum_str(
+                                            &item.span, sub_span, item.id, qualname)),
+                    None => println!("Could not find subspan for enum {}", qualname),
+                }
+                for &variant in enum_definition.variants.iter() {
+                    let name = ident_to_str(&variant.node.name);
+                    let qualname = qualname + "::" + name;
+                    match variant.node.kind {
+                        // FIXME tuple_variant_kind is TupleVariantKind in rust 0.9
+                        // FIXME struct_variant_kind is StructVariantKind in rust 0.9
+                        tuple_variant_kind(ref args) => {
+                            write!(self.out,"{}", self.tuple_variant_str(
+                                    &variant.span,
+                                    variant.node.id, name, qualname));
+                            // TODO walk tuple args
+                        }
+                        // this kind is pretty unlikely
+                        struct_variant_kind(ref struct_def) => {
+                            writeln!(self.out,"structvariant:{:?}", struct_def);
+                        }
+                    }
+                }
             },
             item_impl(ref type_parameters,
                       ref trait_ref,
