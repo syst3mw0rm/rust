@@ -17,6 +17,7 @@ use middle::ty;
 use middle::typeck;
 
 use syntax::ast;
+use syntax::ast_util::variant_def_ids;
 use syntax::ast::*;
 use syntax::ast_map::*;
 use syntax::attr;
@@ -24,7 +25,7 @@ use syntax::codemap::*;
 use syntax::diagnostic;
 use syntax::parse::lexer;
 use syntax::parse::lexer::{reader, StringReader};
-use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,to_str,is_ident,Token,EOF,EQ,COLON,COMMA,RBRACE,LT,GT};
+use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,to_str,is_ident,Token,EOF,EQ,LPAREN,COLON,LT,GT,LBRACE};
 use syntax::visit;
 use syntax::visit::Visitor;
 use syntax::print::pprust::{path_to_str,ty_to_str};
@@ -282,9 +283,13 @@ impl <'l> DxrVisitor<'l> {
                 self.extent_str(span, Some(sub_span)), id, name)
     }
 
-    fn tuple_variant_str(&self, span: &Span, id: NodeId, name: &str, qualname: &str) -> ~str {
-        format!("variant,{},id,{},name,{},qualname,{}\n",
-                self.extent_str(span, None), id, name, qualname)
+    fn tuple_variant_str(&self, span: &Span, sub_span: Option<Span>, id: NodeId, name: &str, qualname: &str) -> ~str {
+        match sub_span {
+            Some(ref ss) => format!("variant,{},id,{},name,{},qualname,{}\n",
+                self.extent_str(span, Some(ss)), id, name, qualname),
+            None => format!("variant,{},id,{},name,{},qualname,{}\n",
+                self.extent_str(span, None), id, name, qualname),
+        }
     }
 
     fn static_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str) -> ~str {
@@ -418,6 +423,7 @@ impl <'l> DxrVisitor<'l> {
                 ast::DefTy(def_id) |
                 ast::DefMod(def_id) |
                 ast::DefStruct(def_id) |
+                ast::DefVariant(_,def_id,_) |
                 ast::DefTrait(def_id) => Some(def_id),
                 _ => {
                     println!("found unexpected def in {} lookup", kind);
@@ -667,17 +673,51 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     let name = ident_to_str(&variant.node.name);
                     let qualname = qualname + "::" + name;
                     match variant.node.kind {
-                        // FIXME tuple_variant_kind is TupleVariantKind in rust 0.9
-                        // FIXME struct_variant_kind is StructVariantKind in rust 0.9
                         tuple_variant_kind(ref args) => {
-                            write!(self.out,"{}", self.tuple_variant_str(
-                                    &variant.span,
-                                    variant.node.id, name, qualname));
-                            // TODO walk tuple args
+                            // try to match equal sign
+                            match self.sub_span_before_token(&variant.span, EQ) {
+                                Some(sub_span) => write!(self.out,"{}",
+                                        self.tuple_variant_str(&variant.span,
+                                        Some(sub_span), variant.node.id, name, qualname)),
+                                None => write!(self.out,"{}", self.tuple_variant_str(
+                                        &variant.span, self.sub_span_before_token(
+                                            &variant.span, LPAREN), variant.node.id,
+                                            name, qualname)),
+                            }
+                            for &arg in args.iter() {
+                                self.visit_ty(arg.ty, e);
+                            }
                         }
-                        // this kind is pretty unlikely
                         struct_variant_kind(ref struct_def) => {
-                            writeln!(self.out,"structvariant:{:?}", struct_def);
+                            let ctor_id = match struct_def.ctor_id {
+                                Some(node_id) => node_id,
+                                None => 0,
+                            };
+                            match self.sub_span_before_token(&variant.span, LBRACE) {
+                                Some(sub_span) => write!(self.out, "{}",
+                                                        self.struct_str(&variant.span,
+                                                        &sub_span, variant.node.id, ctor_id,
+                                                        qualname)),
+                                None => println!("Could not find sub-span for struct {}", qualname),
+                            }
+                            for field in struct_def.fields.iter() {
+                                match field.node.kind {
+                                    named_field(ref ident, _) => {
+                                        let name = ident_to_str(ident);
+                                        let qualname = qualname + "::" + name;
+                                        match self.sub_span_before_token(&field.span, COLON) {
+                                            Some(ref sub_span) => write!(self.out, "{}",
+                                            self.field_str(&field.span,
+                                            sub_span,
+                                            field.node.id,
+                                            name,
+                                            qualname)),
+                                            None => println!("Could not find sub-span for field {}", qualname),
+                                        }
+                                    },
+                                    _ => (),
+                                }
+                            }
                         }
                     }
                 }
@@ -1005,6 +1045,10 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                             }
                             ast::DefFn(def_id, _) => write!(self.out, "{}",
                                 self.fn_call_str(&ex.span, &sub_span, def_id, e.cur_scope)),
+                            ast::DefVariant(_, variant_id, _) => if variant_id.crate == 0 {
+                                write!(self.out, "{}",
+                                self.ref_str("var_ref", &ex.span, &sub_span, variant_id.node));
+                            },
                            _ => println!("Unexpected def kind while looking up path {}", ex.id),
                         }
                         // modules or types in the path prefix
