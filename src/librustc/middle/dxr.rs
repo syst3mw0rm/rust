@@ -323,12 +323,17 @@ impl <'l> DxrVisitor<'l> {
                 kind, self.extent_str(span, Some(sub_span)), id)
     }
 
-    fn meth_call_str(&self, span: &Span, sub_span: &Span, defid: NodeId, declid: Option<NodeId>) -> ~str {
+    fn fn_call_str(&self, span: &Span, sub_span: &Span, id: NodeId, scope_id:NodeId) -> ~str {
+        format!("fn_call,{},refid,{},scopeid,{}\n",
+                self.extent_str(span, Some(sub_span)), id, scope_id)
+    }
+
+    fn meth_call_str(&self, span: &Span, sub_span: &Span, defid: NodeId, declid: Option<NodeId>, scope_id:NodeId) -> ~str {
         match declid {
-            Some(declid) => format!("method_call,{},refid,{},declid,{}\n",
-                self.extent_str(span, Some(sub_span)), defid, declid),
-            None => format!("method_call,{},refid,{}\n",
-                self.extent_str(span, Some(sub_span)), defid),
+            Some(declid) => format!("method_call,{},refid,{},declid,{},scopeid,{}\n",
+                self.extent_str(span, Some(sub_span)), defid, declid, scope_id),
+            None => format!("method_call,{},refid,{},scopeid,{}\n",
+                self.extent_str(span, Some(sub_span)), defid, scope_id),
         }
         
     }
@@ -483,7 +488,7 @@ impl <'l> DxrVisitor<'l> {
         }
         self.visit_ty(method.decl.output, e);
         // walk the fn body
-        self.visit_block(method.body, e);
+        self.visit_block(method.body, DxrVisitorEnv::new_nested(method.id));
 
         // TODO type params
     }
@@ -530,7 +535,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 self.visit_ty(decl.output, e);
 
                 // walk the body
-                self.visit_block(body, e);
+                self.visit_block(body, DxrVisitorEnv::new_nested(item.id));
 
                 // TODO walk type params
             },
@@ -695,7 +700,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                                           &sub_span,
                                                           item.id,
                                                           qualname,
-                                                          e.cur_mod,
+                                                          e.cur_scope,
                                                           filename)),
                     None => println!("Could not find sub-span for module {}", qualname),
                 }
@@ -933,11 +938,11 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                     None => 0,
                                 };
                                 write!(self.out, "{}",
-                                       self.meth_call_str(&ex.span, &sub_span, defid, Some(declid.node)));                                
+                                       self.meth_call_str(&ex.span, &sub_span, defid, Some(declid.node), e.cur_scope));                                
                             }
                             ast::DefFn(def_id, _) => if def_id.crate == 0 {
                                 write!(self.out, "{}",
-                                       self.ref_str("fn_call", &ex.span, &sub_span, def_id.node));
+                                       self.fn_call_str(&ex.span, &sub_span, def_id.node, e.cur_scope));
                             },
                            _ => println!("Unexpected def kind while looking up path {}", ex.id),
                         }
@@ -1015,7 +1020,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                     None => None
                                 };
                                 write!(self.out, "{}",
-                                       self.meth_call_str(&ex.span, &sub_span, def_id.node, declid));
+                                       self.meth_call_str(&ex.span, &sub_span, def_id.node, declid, e.cur_scope));
                             }
                         }
                         typeck::method_param(mp) => {
@@ -1023,7 +1028,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                             let method = ty::trait_method(self.analysis.ty_cx, mp.trait_id, mp.method_num);
                             let sub_span = self.span_for_name(&ex.span);
                             write!(self.out, "{}",
-                                   self.meth_call_str(&ex.span, &sub_span, 0, Some(method.def_id.node)));
+                                   self.meth_call_str(&ex.span, &sub_span, 0, Some(method.def_id.node), e.cur_scope));
                         },
                         typeck::method_object(mo) => {
                             // method invoked on a trait instance
@@ -1032,7 +1037,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                             // We don't know where object methods are defined since they are staticaly
                             // dispatched, so pass 0 as the definition id.
                             write!(self.out, "{}",
-                                   self.meth_call_str(&ex.span, &sub_span, 0, Some(method.def_id.node)));
+                                   self.meth_call_str(&ex.span, &sub_span, 0, Some(method.def_id.node), e.cur_scope));
                         },
                     },
                     None => println!("Could not find method in map {}", ex.id),
@@ -1112,15 +1117,15 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
 
 #[deriving(Clone)]
 struct DxrVisitorEnv {
-    cur_mod: NodeId,
+    cur_scope: NodeId,
 }
 
 impl DxrVisitorEnv {
     fn new() -> DxrVisitorEnv {
-        DxrVisitorEnv{cur_mod: 0}
+        DxrVisitorEnv{cur_scope: 0}
     }
     fn new_nested(new_mod: NodeId) -> DxrVisitorEnv {
-        DxrVisitorEnv{cur_mod: new_mod}
+        DxrVisitorEnv{cur_scope: new_mod}
     }
 }
 
