@@ -15,9 +15,7 @@ use driver::driver::CrateAnalysis;
 use driver::session::Session;
 use middle::ty;
 use middle::typeck;
-
 use syntax::ast;
-use syntax::ast_util::variant_def_ids;
 use syntax::ast::*;
 use syntax::ast_map::*;
 use syntax::attr;
@@ -25,7 +23,7 @@ use syntax::codemap::*;
 use syntax::diagnostic;
 use syntax::parse::lexer;
 use syntax::parse::lexer::{reader, StringReader};
-use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,to_str,is_ident,Token,EOF,EQ,LPAREN,COLON,LT,GT,LBRACE};
+use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,is_ident,Token,EOF,EQ,LPAREN,COLON,LT,GT,LBRACE};
 use syntax::visit;
 use syntax::visit::Visitor;
 use syntax::print::pprust::{path_to_str,ty_to_str};
@@ -1184,6 +1182,52 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
 
     fn visit_pat(&mut self, p:&Pat, e: DxrVisitorEnv) {
         match p.node {
+            PatStruct(ref path, ref fields, _) => {
+                let def_map = self.analysis.ty_cx.def_map.borrow();
+                let def = def_map.get().find(&p.id);
+                let sub_span = match self.sub_span_before_token(&p.span, LBRACE) {
+                    Some(ss) => ss,
+                    None => p.span.clone(),
+                };
+                match def {
+                    Some(&def) => match def {
+                        ast::DefVariant(_, v_id, _) => if v_id.crate == 0 {
+                            write!(self.out, "{}", self.ref_str("struct_ref",
+                                &p.span, &sub_span, v_id.node));
+                        },
+                        _ => println!("Struct pattern {} not a variant.", p.id)
+                    },
+                    _ => println!("Could not find definition for struct pattern {}.", p.id),
+                }
+                visit::walk_path(self, path, e);
+                for field in fields.iter() {
+                    self.visit_pat(field.pat, e);
+                }
+            }
+            PatEnum(ref path, ref children) => {
+                let def_map = self.analysis.ty_cx.def_map.borrow();
+                let def = def_map.get().find(&p.id);
+                let sub_span = match self.sub_span_before_token(&p.span, LPAREN) {
+                    Some(ss) => ss,
+                    None => p.span.clone(),
+                };
+                match def {
+                    Some(&def) => match def {
+                        ast::DefVariant(_, v_id, _) => if v_id.crate == 0 {
+                            write!(self.out, "{}",
+                            self.ref_str("var_ref", &p.span, &sub_span, v_id.node));
+                        },
+                        _ => println!("No variant definition found for {}", p.id),
+                    },
+                    _ => println!("No definition found for pattern {}", p.id),
+                }
+                visit::walk_path(self, path, e);
+                for children in children.iter() {
+                    for child in children.iter() {
+                        self.visit_pat(*child, e);
+                    }
+                }
+            }
             PatIdent(bm, ref path, ref optional_subpattern) => {
                 let immut = match bm {
                     BindByRef(mt) |
