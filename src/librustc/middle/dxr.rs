@@ -39,7 +39,7 @@ struct DxrVisitor<'l> {
     sess: Session,
     analysis: &'l CrateAnalysis,
 
-    collected_paths: ~[(NodeId, ast::Path)],
+    collected_paths: ~[(NodeId, ast::Path, bool)],
 
     // output file
     out: ~Writer,
@@ -247,14 +247,15 @@ impl <'l> DxrVisitor<'l> {
         }
     }
 
-    fn variable_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str) -> ~str {
+    // value is the initialising expression of the variable if it is not mut, otherwise "".
+    fn variable_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, value: &str) -> ~str {
         // XXX getting a fully qualified name for a variable is hard because in
         // the local case they can be overridden in one block and there is no nice
         // way to refer to a scope in english, so we just hack it by appending the
         // variable def's node id
-        format!("variable,{},id,{},name,{},qualname,{}\n",
+        format!("variable,{},id,{},name,{},qualname,{},value,\"{}\"\n",
                 self.extent_str(span, Some(sub_span)), id, name,
-                name + "$" + id.to_str())
+                name + "$" + id.to_str(), value)
     }
 
     // formal parameters
@@ -264,9 +265,10 @@ impl <'l> DxrVisitor<'l> {
                 fn_name + "::" + name)
     }
 
-    fn static_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str) -> ~str {
-        format!("variable,{},id,{},name,{},qualname,{}\n",
-                self.extent_str(span, Some(sub_span)), id, name, qualname)
+    // value is the initialising expression of the static if it is not mut, otherwise "".
+    fn static_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str, value: &str) -> ~str {
+        format!("variable,{},id,{},name,{},qualname,{},value,\"{}\"\n",
+                self.extent_str(span, Some(sub_span)), id, name, qualname, value)
     }
 
     fn field_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str) -> ~str {
@@ -455,7 +457,7 @@ impl <'l> DxrVisitor<'l> {
         for arg in method.decl.inputs.iter() {
             self.collected_paths.clear();
             self.visit_pat(arg.pat, e);
-            for &(id, ref p) in self.collected_paths.iter() {
+            for &(id, ref p, _) in self.collected_paths.iter() {
                 // get the span only for the name of the variable (I hope the path is only ever a
                 // variable name, but who knows?)
                 let sub_span = self.span_for_name(&p.span);
@@ -515,7 +517,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 for arg in decl.inputs.iter() {
                     self.collected_paths.clear();
                     self.visit_pat(arg.pat, e);
-                    for &(id, ref p) in self.collected_paths.iter() {
+                    for &(id, ref p, _) in self.collected_paths.iter() {
                         // get the span only for the name of the variable (I hope the path is only ever a
                         // variable name, but who knows?)
                         let sub_span = self.span_for_name(&p.span);
@@ -539,10 +541,20 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
 
                 // TODO walk type params
             },
-            item_static(typ, _, expr) => {
+            item_static(typ, mt, expr) => {
                 let qualname = match *self.analysis.ty_cx.items.get(&item.id) {
                     node_item(_, path) => path_ident_to_str(path, item.ident, get_ident_interner()),
                     _ => ~""
+                };
+
+                let value = match mt {
+                    MutMutable => ~"",
+                    MutImmutable => {
+                        match self.sess.codemap.span_to_snippet(expr.span) {
+                            Some(s) => s,
+                            None => ~"",
+                        }
+                    },
                 };
 
                 match self.sub_span_after_keyword(&item.span, keywords::Static) {
@@ -551,7 +563,8 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                                              &sub_span,
                                                              item.id,
                                                              ident_to_str(&item.ident),
-                                                             qualname)),
+                                                             qualname,
+                                                             value)),
                     None => println("Could not find sub-span for static item name"),
                 }
 
@@ -1081,8 +1094,17 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
 
     fn visit_pat(&mut self, p:&Pat, e: DxrVisitorEnv) {
         match p.node {
-            PatIdent(_, ref path, ref optional_subpattern) => {
-                self.collected_paths.push((p.id, path.clone()));
+            PatIdent(bm, ref path, ref optional_subpattern) => {
+                let immut = match bm {
+                    BindByRef(mt) |
+                    BindByValue(mt) => {
+                        match mt {
+                            MutMutable => false,
+                            MutImmutable => true,
+                        }
+                    }
+                };
+                self.collected_paths.push((p.id, path.clone(), immut));
                 match *optional_subpattern {
                     None => {}
                     Some(subpattern) => self.visit_pat(subpattern, e),
@@ -1096,17 +1118,24 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
         // the local could declare multiple new vars, we must walk the pattern and collect them all
         self.collected_paths.clear();
         self.visit_pat(l.pat, e);
-        for &(id,ref p) in self.collected_paths.iter() {
+
+        let value = match self.sess.codemap.span_to_snippet(l.span) {
+            Some(s) => s,
+            None => ~"",
+        };
+
+        for &(id,ref p, ref immut) in self.collected_paths.iter() {
+            let value = if *immut { value.to_owned() } else { ~"" };
             // get the span only for the name of the variable (I hope the path is only ever a
             // variable name, but who knows?)
             let sub_span = self.span_for_name(&p.span);
-            // for some reason, Rust uses the id of the pattern for var lookups, so we'll
-            // use it too
+            // Rust uses the id of the pattern for var lookups, so we'll use it too
             write!(self.out, "{}",
                    self.variable_str(&p.span,
                                      &sub_span,
                                      id,
-                                     path_to_str(p, get_ident_interner())));
+                                     path_to_str(p, get_ident_interner()),
+                                     value));
         }
 
         // Just walk the initialiser and type (don't want to walk the pattern again)
