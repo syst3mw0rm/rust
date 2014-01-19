@@ -705,16 +705,14 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                         let qualname = qualname + "::" + name;
                                         match self.sub_span_before_token(&field.span, COLON) {
                                             Some(ref sub_span) => write!(self.out, "{}",
-                                            self.field_str(&field.span,
-                                            sub_span,
-                                            field.node.id,
-                                            name,
-                                            qualname)),
+                                            self.field_str(&field.span, sub_span, field.node.id,
+                                                            name, qualname)),
                                             None => println!("Could not find sub-span for field {}", qualname),
                                         }
                                     },
                                     _ => (),
                                 }
+                                self.visit_ty(field.node.ty, e);
                             }
                         }
                     }
@@ -1009,7 +1007,9 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     Some(d) => {
                         match *d {
                             ast::DefLocal(id, _) |
-                            ast::DefArg(id, _) => write!(self.out, "{}",
+                            ast::DefArg(id, _) 
+                            ast::DefBinding(id, _) | 
+                            ast::DefUpvar(id, _, _, _) => write!(self.out, "{}",
                                 self.ref_str("var_ref", &ex.span, &sub_span, DefId{node:id, crate:0})),
                             ast::DefStatic(def_id,_) => write!(self.out, "{}",
                                 self.ref_str("var_ref", &ex.span, &sub_span, def_id)),
@@ -1045,7 +1045,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                 self.fn_call_str(&ex.span, &sub_span, def_id, e.cur_scope)),
                             ast::DefVariant(_, variant_id, _) => if variant_id.crate == 0 {
                                 write!(self.out, "{}",
-                                self.ref_str("var_ref", &ex.span, &sub_span, variant_id.node));
+                                self.ref_str("var_ref", &ex.span, &sub_span, variant_id));
                             },
                            _ => println!("Unexpected def kind while looking up path {}", ex.id),
                         }
@@ -1239,6 +1239,18 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     }
                 };
                 self.collected_paths.push((p.id, path.clone(), immut));
+                let def_map = self.analysis.ty_cx.def_map.borrow();
+                let def = def_map.get().find(&p.id);
+                let sub_span = self.span_for_name(&p.span);
+                match def {
+                    Some(&def) => match def {
+                        ast::DefBinding(id, _) => write!(self.out, "{}",
+                        self.variable_str(&p.span, &sub_span, id,
+                        path_to_str(path, get_ident_interner()))),
+                        _ => (),
+                    },
+                    _ => (),
+                }
                 match *optional_subpattern {
                     None => {}
                     Some(subpattern) => self.visit_pat(subpattern, e),
