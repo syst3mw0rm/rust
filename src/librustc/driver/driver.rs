@@ -340,13 +340,12 @@ pub fn phase_3_run_analysis_passes(sess: Session,
 pub fn phase_dxr(sess: Session,
                  crate: &ast::Crate,
                  analysis: &CrateAnalysis,
-                 odir: &Option<Path>,
-                 src_name: @str) {
+                 odir: &Option<Path>) {
     if !sess.opts.save_analysis {
         return;
     }
     time(sess.time_passes(), "dxr output", crate, |crate|
-         middle::dxr::process_crate(sess, crate, analysis, odir, src_name.to_owned()));
+         middle::dxr::process_crate(sess, crate, analysis, odir));
 }
 
 pub struct CrateTranslation {
@@ -481,7 +480,7 @@ pub fn compile_input(sess: Session, cfg: ast::CrateConfig, input: &input,
         let outputs = build_output_filenames(input, outdir, output,
                                              expanded_crate.attrs, sess);
         let analysis = phase_3_run_analysis_passes(sess, &expanded_crate);
-        phase_dxr(sess, &expanded_crate, &analysis, outdir, source_name(input));
+        phase_dxr(sess, &expanded_crate, &analysis, outdir);
         if stop_after_phase_3(sess) { return; }
         let trans = phase_4_translate_to_llvm(sess, expanded_crate,
                                               &analysis, outputs);
