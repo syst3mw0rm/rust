@@ -281,13 +281,14 @@ impl <'l> DxrVisitor<'l> {
                 self.extent_str(span, Some(sub_span)), id, name)
     }
 
-    fn tuple_variant_str(&self, span: &Span, sub_span: Option<Span>, id: NodeId, name: &str, qualname: &str) -> ~str {
-        match sub_span {
-            Some(ref ss) => format!("variant,{},id,{},name,{},qualname,{}\n",
-                self.extent_str(span, Some(ss)), id, name, qualname),
-            None => format!("variant,{},id,{},name,{},qualname,{}\n",
-                self.extent_str(span, None), id, name, qualname),
-        }
+    fn tuple_variant_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str, val: &str) -> ~str {
+        format!("variant,{},id,{},name,{},qualname,{},value,\"{}\"\n",
+            self.extent_str(span, Some(sub_span)), id, name, qualname, val)
+    }
+
+    fn cvariant_str(&self, span: &Span, id: NodeId, name: &str, qualname: &str, val: &str) -> ~str {
+        format!("variant,{},id,{},name,{},qualname,{},value,\"{}\"\n",
+            self.extent_str(span, None), id, name, qualname, val)
     }
 
     fn static_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str) -> ~str {
@@ -321,9 +322,9 @@ impl <'l> DxrVisitor<'l> {
                 self.extent_str(span, Some(sub_span)), name, id, scope_id)
     }
 
-    fn struct_str(&self, span: &Span, sub_span: &Span, id: NodeId, ctor_id: NodeId, name: &str) -> ~str {
-        format!("struct,{},id,{},ctor_id,{},qualname,{}\n",
-                self.extent_str(span, Some(sub_span)), id, ctor_id, name)
+    fn struct_str(&self, span: &Span, sub_span: &Span, id: NodeId, ctor_id: NodeId, name: &str, val: &str) -> ~str {
+        format!("struct,{},id,{},ctor_id,{},qualname,{},val,\"{}\"\n",
+                self.extent_str(span, Some(sub_span)), id, ctor_id, name, val)
     }
 
     fn trait_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str) -> ~str {
@@ -397,7 +398,7 @@ impl <'l> DxrVisitor<'l> {
     }
 
     fn typedef_str(&self, span: &Span, sub_span: &Span, id: NodeId, qualname: &str, value: &str) -> ~str {
-        format!("typedef,{},qualname,{},id,{},value,{}\n",
+        format!("typedef,{},qualname,{},id,{},value,\"{}\"\n",
                 self.extent_str(span, Some(sub_span)), qualname, id, value)
     }
 
@@ -631,7 +632,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                              self.struct_str(&item.span,
                                                              &sub_span,
                                                              item.id, ctor_id,
-                                                             qualname)),
+                                                             qualname, "")),
                     None => println!("Could not find sub-span for struct {}", qualname),
                 }
 
@@ -670,17 +671,24 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 for &variant in enum_definition.variants.iter() {
                     let name = ident_to_str(&variant.node.name);
                     let qualname = qualname + "::" + name;
+                    let val = match self.sess.codemap.span_to_snippet(variant.span) {
+                        Some(snip) => snip,
+                        None => ~"",
+                    };
                     match variant.node.kind {
                         tuple_variant_kind(ref args) => {
-                            // try to match equal sign
+                            // if it's just a constant, match equal sign
+                            // if it's a tuple of types, match the left paren
                             match self.sub_span_before_token(&variant.span, EQ) {
                                 Some(sub_span) => write!(self.out,"{}",
-                                        self.tuple_variant_str(&variant.span,
-                                        Some(sub_span), variant.node.id, name, qualname)),
-                                None => write!(self.out,"{}", self.tuple_variant_str(
-                                        &variant.span, self.sub_span_before_token(
-                                            &variant.span, LPAREN), variant.node.id,
-                                            name, qualname)),
+                                        self.tuple_variant_str(&variant.span, &sub_span,
+                                        variant.node.id, name, qualname, val)),
+                                None => match self.sub_span_before_token(&variant.span, LPAREN) {
+                                    Some(sub_span) => write!(self.out,"{}", self.tuple_variant_str(
+                                        &variant.span, &sub_span, variant.node.id, name, qualname, val)),
+                                    None => write!(self.out,"{}", self.cvariant_str(&variant.span,
+                                            variant.node.id, name, qualname, val)),
+                                },
                             }
                             for &arg in args.iter() {
                                 self.visit_ty(arg.ty, e);
@@ -695,7 +703,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                 Some(sub_span) => write!(self.out, "{}",
                                                         self.struct_str(&variant.span,
                                                         &sub_span, variant.node.id, ctor_id,
-                                                        qualname)),
+                                                        qualname, val)),
                                 None => println!("Could not find sub-span for struct {}", qualname),
                             }
                             for field in struct_def.fields.iter() {
@@ -1246,6 +1254,9 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     Some(&def) => match def {
                         ast::DefBinding(id, _) => write!(self.out, "{}",
                         self.variable_str(&p.span, &sub_span, id,
+                        path_to_str(path, get_ident_interner()))),
+                        ast::DefVariant(_,id,_) => write!(self.out, "{}",
+                        self.variable_str(&p.span, &sub_span, id.node,
                         path_to_str(path, get_ident_interner()))),
                         _ => (),
                     },
