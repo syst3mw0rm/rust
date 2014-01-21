@@ -1253,11 +1253,10 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 match def {
                     Some(&def) => match def {
                         ast::DefBinding(id, _) => write!(self.out, "{}",
-                        self.variable_str(&p.span, &sub_span, id,
-                        path_to_str(path, get_ident_interner()))),
+                                self.variable_str(&p.span, &sub_span, id,
+                                path_to_str(path, get_ident_interner()))),
                         ast::DefVariant(_,id,_) => write!(self.out, "{}",
-                        self.variable_str(&p.span, &sub_span, id.node,
-                        path_to_str(path, get_ident_interner()))),
+                                self.ref_str("var_ref",&p.span, &sub_span, id.node)),
                         _ => (),
                     },
                     _ => (),
