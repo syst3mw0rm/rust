@@ -23,7 +23,7 @@ use syntax::codemap::*;
 use syntax::diagnostic;
 use syntax::parse::lexer;
 use syntax::parse::lexer::{reader, StringReader};
-use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,is_ident,Token,EOF,EQ,LPAREN,COLON,LT,GT,LBRACE};
+use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,is_ident,Token,EOF,EQ,LPAREN,COLON,LT,GT,LBRACE,COMMA,to_str};
 use syntax::visit;
 use syntax::visit::Visitor;
 use syntax::print::pprust::{path_to_str,ty_to_str};
@@ -89,7 +89,6 @@ impl <'l> DxrVisitor<'l> {
                 hi_pos = *cph;
             }
         }
-
         return format!("file_name,{},file_line,{},file_col,{},extent_start,{},file_line_end,{},file_col_end,{},extent_end,{}",
                        lo_loc.file.name, lo_loc.line, *lo_loc.col, lo_pos,
                        hi_loc.line, *hi_loc.col, hi_pos);
@@ -144,6 +143,20 @@ impl <'l> DxrVisitor<'l> {
             }
             prev = next;
         }
+    }
+
+    // this is so bad...
+    fn sub_span_after_token(&self, span: &Span, tok: Token) -> Span {
+        let mut new_span = span.clone();
+        while new_span.lo < new_span.hi {
+            if self.sess.codemap.span_to_snippet(Span{
+                    lo:new_span.lo, hi:new_span.lo+BytePos(1),
+                    expn_info: new_span.expn_info}).unwrap() == to_str(get_ident_interner(), &tok) {
+                return new_span;
+            }
+            new_span.lo = new_span.lo + BytePos(1);
+        }
+        return new_span;
     }
 
     fn sub_span_after_keyword(&self, span: &Span, keyword: keywords::Keyword) -> Option<Span> {
@@ -323,7 +336,7 @@ impl <'l> DxrVisitor<'l> {
     }
 
     fn struct_str(&self, span: &Span, sub_span: &Span, id: NodeId, ctor_id: NodeId, name: &str, val: &str) -> ~str {
-        format!("struct,{},id,{},ctor_id,{},qualname,{},val,\"{}\"\n",
+        format!("struct,{},id,{},ctor_id,{},qualname,{},value,\"{}\"\n",
                 self.extent_str(span, Some(sub_span)), id, ctor_id, name, val)
     }
 
@@ -687,7 +700,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                     Some(sub_span) => write!(self.out,"{}", self.tuple_variant_str(
                                         &variant.span, &sub_span, variant.node.id, name, qualname, val)),
                                     None => write!(self.out,"{}", self.cvariant_str(&variant.span,
-                                            variant.node.id, name, qualname, val)),
+                                            variant.node.id, name, qualname, ~"")),
                                 },
                             }
                             for &arg in args.iter() {
@@ -1208,7 +1221,35 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     _ => println!("Could not find definition for struct pattern {}.", p.id),
                 }
                 visit::walk_path(self, path, e);
+                let struct_def = match self.lookup_type_ref(p.id, "struct") {
+                    Some(id) => Some(DefId{crate:0, node:id}),
+                    None => None,
+                };
+                // the AST doesn't give us a span for the struct field, so we have
+                // to figure out where it is by assuming it comes before colons
+                // first shorten field span to its opening brace
+                let mut field_span = self.sub_span_after_token(&p.span, LBRACE);
                 for field in fields.iter() {
+                    match struct_def {
+                        Some(struct_def) => {
+                            let fields = ty::lookup_struct_fields(self.analysis.ty_cx, struct_def);
+                            for f in fields.iter() {
+                                if f.name == field.ident.name {
+                                    // use text up to colon as subspan
+                                    match self.sub_span_before_token(&field_span, COLON) {
+                                        Some(fs) => {
+                                            write!(self.out, "{}",
+                                                self.ref_str("var_ref", &field_span, &fs, f.id.node));
+                                        },
+                                        None => (),
+                                    }
+                                    // shorten field_span to the next comma
+                                    field_span = self.sub_span_after_token(&field_span, COMMA);
+                                }
+                            }
+                        },
+                        _ => (),
+                    }
                     self.visit_pat(field.pat, e);
                 }
             }
