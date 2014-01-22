@@ -15,7 +15,6 @@ use driver::driver::CrateAnalysis;
 use driver::session::Session;
 use middle::ty;
 use middle::typeck;
-
 use syntax::ast;
 use syntax::ast::*;
 use syntax::ast_map::*;
@@ -24,7 +23,7 @@ use syntax::codemap::*;
 use syntax::diagnostic;
 use syntax::parse::lexer;
 use syntax::parse::lexer::{reader, StringReader};
-use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,is_ident,Token,EOF,EQ,COLON,LT,GT};
+use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,is_ident,Token,EOF,EQ,LPAREN,COLON,LT,GT,LBRACE,COMMA,to_str};
 use syntax::visit;
 use syntax::visit::Visitor;
 use syntax::print::pprust::{path_to_str,ty_to_str};
@@ -90,7 +89,6 @@ impl <'l> DxrVisitor<'l> {
                 hi_pos = *cph;
             }
         }
-
         return format!("file_name,{},file_line,{},file_col,{},extent_start,{},file_line_end,{},file_col_end,{},extent_end,{}",
                        lo_loc.file.name, lo_loc.line, *lo_loc.col, lo_pos,
                        hi_loc.line, *hi_loc.col, hi_pos);
@@ -145,6 +143,20 @@ impl <'l> DxrVisitor<'l> {
             }
             prev = next;
         }
+    }
+
+    // this is so bad...
+    fn sub_span_after_token(&self, span: &Span, tok: Token) -> Span {
+        let mut new_span = span.clone();
+        while new_span.lo < new_span.hi {
+            if self.sess.codemap.span_to_snippet(Span{
+                    lo:new_span.lo, hi:new_span.lo+BytePos(1),
+                    expn_info: new_span.expn_info}).unwrap() == to_str(get_ident_interner(), &tok) {
+                return new_span;
+            }
+            new_span.lo = new_span.lo + BytePos(1);
+        }
+        return new_span;
     }
 
     fn sub_span_after_keyword(&self, span: &Span, keyword: keywords::Keyword) -> Option<Span> {
@@ -277,7 +289,27 @@ impl <'l> DxrVisitor<'l> {
                 self.extent_str(span, Some(sub_span)), id, name,
                 fn_name + "::" + name)
     }
+    fn enum_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str) -> ~str {
+        format!("enum,{},id,{},qualname,{}\n",
+                self.extent_str(span, Some(sub_span)), id, name)
+    }
 
+    fn tuple_variant_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str, val: &str) -> ~str {
+        format!("variant,{},id,{},name,{},qualname,{},value,\"{}\"\n",
+            self.extent_str(span, Some(sub_span)), id, name, qualname, val)
+    }
+
+    fn cvariant_str(&self, span: &Span, id: NodeId, name: &str, qualname: &str, val: &str) -> ~str {
+        format!("variant,{},id,{},name,{},qualname,{},value,\"{}\"\n",
+            self.extent_str(span, None), id, name, qualname, val)
+    }
+
+    fn struct_variant_str(&self, span: &Span, sub_span: &Span, id: NodeId, ctor_id: NodeId, name: &str, val: &str) -> ~str {
+        format!("variant_struct,{},id,{},ctor_id,{},qualname,{},value,\"{}\"\n",
+                self.extent_str(span, Some(sub_span)), id, ctor_id, name, val)
+    }
+
+    fn static_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str) -> ~str {
     // value is the initialising expression of the static if it is not mut, otherwise "".
     fn static_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str, value: &str) -> ~str {
         format!("variable,{},id,{},name,{},qualname,{},value,\"{}\"\n",
@@ -308,9 +340,9 @@ impl <'l> DxrVisitor<'l> {
                 self.extent_str(span, Some(sub_span)), name, id, scope_id)
     }
 
-    fn struct_str(&self, span: &Span, sub_span: &Span, id: NodeId, ctor_id: NodeId, name: &str) -> ~str {
-        format!("struct,{},id,{},ctor_id,{},qualname,{}\n",
-                self.extent_str(span, Some(sub_span)), id, ctor_id, name)
+    fn struct_str(&self, span: &Span, sub_span: &Span, id: NodeId, ctor_id: NodeId, name: &str, val: &str) -> ~str {
+        format!("struct,{},id,{},ctor_id,{},qualname,{},value,\"{}\"\n",
+                self.extent_str(span, Some(sub_span)), id, ctor_id, name, val)
     }
 
     fn trait_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str) -> ~str {
@@ -384,7 +416,7 @@ impl <'l> DxrVisitor<'l> {
     }
 
     fn typedef_str(&self, span: &Span, sub_span: &Span, id: NodeId, qualname: &str, value: &str) -> ~str {
-        format!("typedef,{},qualname,{},id,{},value,{}\n",
+        format!("typedef,{},qualname,{},id,{},value,\"{}\"\n",
                 self.extent_str(span, Some(sub_span)), qualname, id, value)
     }
 
@@ -408,6 +440,7 @@ impl <'l> DxrVisitor<'l> {
                 ast::DefTy(def_id) |
                 ast::DefMod(def_id) |
                 ast::DefStruct(def_id) |
+                ast::DefVariant(_,def_id,_) |
                 ast::DefTrait(def_id) => Some(def_id),
                 _ => {
                     println!("found unexpected def in {} lookup", kind);
@@ -617,7 +650,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                              self.struct_str(&item.span,
                                                              &sub_span,
                                                              item.id, ctor_id,
-                                                             qualname)),
+                                                             qualname, "")),
                     None => println!("Could not find sub-span for struct {}", qualname),
                 }
 
@@ -642,6 +675,74 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 }
 
                 // TODO walk type params
+            },
+            item_enum(ref enum_definition, ref type_parameters) => {
+                let qualname = match *self.analysis.ty_cx.items.get(&item.id) {
+                    node_item(_, path) => path_ident_to_str(path, item.ident, get_ident_interner()),
+                    _ => ~""
+                };
+                match self.sub_span_after_keyword(&item.span, keywords::Enum) {
+                    Some(ref sub_span) => write!(self.out, "{}", self.enum_str(
+                                            &item.span, sub_span, item.id, qualname)),
+                    None => println!("Could not find subspan for enum {}", qualname),
+                }
+                for &variant in enum_definition.variants.iter() {
+                    let name = ident_to_str(&variant.node.name);
+                    let qualname = qualname + "::" + name;
+                    let val = match self.sess.codemap.span_to_snippet(variant.span) {
+                        Some(snip) => snip,
+                        None => ~"",
+                    };
+                    match variant.node.kind {
+                        tuple_variant_kind(ref args) => {
+                            // if it's just a constant, match equal sign
+                            // if it's a tuple of types, match the left paren
+                            match self.sub_span_before_token(&variant.span, EQ) {
+                                Some(sub_span) => write!(self.out,"{}",
+                                        self.tuple_variant_str(&variant.span, &sub_span,
+                                        variant.node.id, name, qualname, val)),
+                                None => match self.sub_span_before_token(&variant.span, LPAREN) {
+                                    Some(sub_span) => write!(self.out,"{}", self.tuple_variant_str(
+                                        &variant.span, &sub_span, variant.node.id, name, qualname, val)),
+                                    None => write!(self.out,"{}", self.cvariant_str(&variant.span,
+                                            variant.node.id, name, qualname, ~"")),
+                                },
+                            }
+                            for &arg in args.iter() {
+                                self.visit_ty(arg.ty, e);
+                            }
+                        }
+                        struct_variant_kind(ref struct_def) => {
+                            let ctor_id = match struct_def.ctor_id {
+                                Some(node_id) => node_id,
+                                None => 0,
+                            };
+                            match self.sub_span_before_token(&variant.span, LBRACE) {
+                                Some(sub_span) => write!(self.out, "{}",
+                                                        self.struct_variant_str(&variant.span,
+                                                        &sub_span, variant.node.id, ctor_id,
+                                                        qualname, val)),
+                                None => println!("Could not find sub-span for struct {}", qualname),
+                            }
+                            for field in struct_def.fields.iter() {
+                                match field.node.kind {
+                                    named_field(ref ident, _) => {
+                                        let name = ident_to_str(ident);
+                                        let qualname = qualname + "::" + name;
+                                        match self.sub_span_before_token(&field.span, COLON) {
+                                            Some(ref sub_span) => write!(self.out, "{}",
+                                            self.field_str(&field.span, sub_span, field.node.id,
+                                                            name, qualname)),
+                                            None => println!("Could not find sub-span for field {}", qualname),
+                                        }
+                                    },
+                                    _ => (),
+                                }
+                                self.visit_ty(field.node.ty, e);
+                            }
+                        }
+                    }
+                }
             },
             item_impl(ref type_parameters,
                       ref trait_ref,
@@ -932,7 +1033,9 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     Some(d) => {
                         match *d {
                             ast::DefLocal(id, _) |
-                            ast::DefArg(id, _) => write!(self.out, "{}",
+                            ast::DefArg(id, _) 
+                            ast::DefBinding(id, _) | 
+                            ast::DefUpvar(id, _, _, _) => write!(self.out, "{}",
                                 self.ref_str("var_ref", &ex.span, &sub_span, DefId{node:id, crate:0})),
                             ast::DefStatic(def_id,_) => write!(self.out, "{}",
                                 self.ref_str("var_ref", &ex.span, &sub_span, def_id)),
@@ -966,6 +1069,10 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                             }
                             ast::DefFn(def_id, _) => write!(self.out, "{}",
                                 self.fn_call_str(&ex.span, &sub_span, def_id, e.cur_scope)),
+                            ast::DefVariant(_, variant_id, _) => if variant_id.crate == 0 {
+                                write!(self.out, "{}",
+                                self.ref_str("var_ref", &ex.span, &sub_span, variant_id));
+                            },
                            _ => println!("Unexpected def kind while looking up path {}", ex.id),
                         }
                         // modules or types in the path prefix
@@ -1101,6 +1208,80 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
 
     fn visit_pat(&mut self, p:&Pat, e: DxrVisitorEnv) {
         match p.node {
+            PatStruct(ref path, ref fields, _) => {
+                let def_map = self.analysis.ty_cx.def_map.borrow();
+                let def = def_map.get().find(&p.id);
+                let sub_span = match self.sub_span_before_token(&p.span, LBRACE) {
+                    Some(ss) => ss,
+                    None => p.span.clone(),
+                };
+                match def {
+                    Some(&def) => match def {
+                        ast::DefVariant(_, v_id, _) => if v_id.crate == 0 {
+                            write!(self.out, "{}", self.ref_str("struct_ref",
+                                &p.span, &sub_span, v_id.node));
+                        },
+                        _ => println!("Struct pattern {} not a variant.", p.id)
+                    },
+                    _ => println!("Could not find definition for struct pattern {}.", p.id),
+                }
+                visit::walk_path(self, path, e);
+                let struct_def = match self.lookup_type_ref(p.id, "struct") {
+                    Some(id) => Some(DefId{crate:0, node:id}),
+                    None => None,
+                };
+                // the AST doesn't give us a span for the struct field, so we have
+                // to figure out where it is by assuming it comes before colons
+                // first shorten field span to its opening brace
+                let mut field_span = self.sub_span_after_token(&p.span, LBRACE);
+                for field in fields.iter() {
+                    match struct_def {
+                        Some(struct_def) => {
+                            let fields = ty::lookup_struct_fields(self.analysis.ty_cx, struct_def);
+                            for f in fields.iter() {
+                                if f.name == field.ident.name {
+                                    // use text up to colon as subspan
+                                    match self.sub_span_before_token(&field_span, COLON) {
+                                        Some(fs) => {
+                                            write!(self.out, "{}",
+                                                self.ref_str("var_ref", &field_span, &fs, f.id.node));
+                                        },
+                                        None => (),
+                                    }
+                                    // shorten field_span to the next comma
+                                    field_span = self.sub_span_after_token(&field_span, COMMA);
+                                }
+                            }
+                        },
+                        _ => (),
+                    }
+                    self.visit_pat(field.pat, e);
+                }
+            }
+            PatEnum(ref path, ref children) => {
+                let def_map = self.analysis.ty_cx.def_map.borrow();
+                let def = def_map.get().find(&p.id);
+                let sub_span = match self.sub_span_before_token(&p.span, LPAREN) {
+                    Some(ss) => ss,
+                    None => p.span.clone(),
+                };
+                match def {
+                    Some(&def) => match def {
+                        ast::DefVariant(_, v_id, _) => if v_id.crate == 0 {
+                            write!(self.out, "{}",
+                            self.ref_str("var_ref", &p.span, &sub_span, v_id.node));
+                        },
+                        _ => println!("No variant definition found for {}", p.id),
+                    },
+                    _ => println!("No definition found for pattern {}", p.id),
+                }
+                visit::walk_path(self, path, e);
+                for children in children.iter() {
+                    for child in children.iter() {
+                        self.visit_pat(*child, e);
+                    }
+                }
+            }
             PatIdent(bm, ref path, ref optional_subpattern) => {
                 let immut = match bm {
                     BindByRef(mt) |
@@ -1112,6 +1293,20 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     }
                 };
                 self.collected_paths.push((p.id, path.clone(), immut));
+                let def_map = self.analysis.ty_cx.def_map.borrow();
+                let def = def_map.get().find(&p.id);
+                let sub_span = self.span_for_name(&p.span);
+                match def {
+                    Some(&def) => match def {
+                        ast::DefBinding(id, _) => write!(self.out, "{}",
+                                self.variable_str(&p.span, &sub_span, id,
+                                path_to_str(path, get_ident_interner()))),
+                        ast::DefVariant(_,id,_) => write!(self.out, "{}",
+                                self.ref_str("var_ref",&p.span, &sub_span, id.node)),
+                        _ => (),
+                    },
+                    _ => (),
+                }
                 match *optional_subpattern {
                     None => {}
                     Some(subpattern) => self.visit_pat(subpattern, e),
