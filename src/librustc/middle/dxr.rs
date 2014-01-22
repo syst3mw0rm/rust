@@ -304,6 +304,11 @@ impl <'l> DxrVisitor<'l> {
             self.extent_str(span, None), id, name, qualname, val)
     }
 
+    fn struct_variant_str(&self, span: &Span, sub_span: &Span, id: NodeId, ctor_id: NodeId, name: &str, val: &str) -> ~str {
+        format!("variant_struct,{},id,{},ctor_id,{},qualname,{},value,\"{}\"\n",
+                self.extent_str(span, Some(sub_span)), id, ctor_id, name, val)
+    }
+
     fn static_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str) -> ~str {
     // value is the initialising expression of the static if it is not mut, otherwise "".
     fn static_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str, value: &str) -> ~str {
@@ -714,7 +719,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                             };
                             match self.sub_span_before_token(&variant.span, LBRACE) {
                                 Some(sub_span) => write!(self.out, "{}",
-                                                        self.struct_str(&variant.span,
+                                                        self.struct_variant_str(&variant.span,
                                                         &sub_span, variant.node.id, ctor_id,
                                                         qualname, val)),
                                 None => println!("Could not find sub-span for struct {}", qualname),
