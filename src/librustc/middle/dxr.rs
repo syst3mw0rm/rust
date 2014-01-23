@@ -34,6 +34,7 @@ use std::io::File;
 use std::io::fs;
 use std::os;
 use std::path::Path;
+use std::str;
 
 
 struct DxrVisitor<'l> {
@@ -44,6 +45,11 @@ struct DxrVisitor<'l> {
 
     // output file
     out: ~Writer,
+}
+
+// Helper function to escape quotes in a string
+fn escape(s: &str) -> ~str {
+    str::replace(s, "\"", "\"\"")
 }
 
 impl <'l> DxrVisitor<'l> {
@@ -221,31 +227,37 @@ impl <'l> DxrVisitor<'l> {
         result
     }
 
-    fn write_sub_paths(&mut self, path: &ast::Path) {
+    fn write_sub_paths(&mut self, path: &ast::Path, scope_id: NodeId) {
         let sub_paths = self.process_path_prefixes(path);
         for &(ref span, ref qualname) in sub_paths.iter() {
-            let sub_mod_str = self.sub_mod_ref_str(&path.span, span, *qualname);
+            let sub_mod_str = self.sub_mod_ref_str(&path.span, span, *qualname, scope_id);
             write!(self.out, "{}", sub_mod_str);                                                                        
         }        
     }
 
     // As write_sub_paths, but does not process the last ident in the path (assuming it
     // will be processed elsewhere).
-    fn write_sub_paths_truncated(&mut self, path: &ast::Path) {
+    fn write_sub_paths_truncated(&mut self, path: &ast::Path, scope_id: NodeId) {
         let sub_paths = self.process_path_prefixes(path);
         let len = sub_paths.len();
+        if len < 1 {
+            return;
+        }
         let sub_paths = sub_paths.slice(0, len-1);
         for &(ref span, ref qualname) in sub_paths.iter() {
-            let sub_mod_str = self.sub_mod_ref_str(&path.span, span, *qualname);
+            let sub_mod_str = self.sub_mod_ref_str(&path.span, span, *qualname, scope_id);
             write!(self.out, "{}", sub_mod_str);                                                                        
         }
     }
 
     // As write_sub_paths, but expects a path of the form module_path::trait::method
     // Where trait could actually be a struct too.
-    fn write_sub_path_trait_truncated(&mut self, path: &ast::Path) {
+    fn write_sub_path_trait_truncated(&mut self, path: &ast::Path, scope_id: NodeId) {
         let sub_paths = self.process_path_prefixes(path);
         let len = sub_paths.len();
+        if len < 2 {
+            return;
+        }
         let sub_paths = sub_paths.slice(0, len-1);
         if len == 1 {
             return;
@@ -255,7 +267,7 @@ impl <'l> DxrVisitor<'l> {
         write!(self.out, "{}", sub_type_str);                                                                        
         let sub_paths = sub_paths.slice(0, len-2);
         for &(ref span, ref qualname) in sub_paths.iter() {
-            let sub_mod_str = self.sub_mod_ref_str(&path.span, span, *qualname);
+            let sub_mod_str = self.sub_mod_ref_str(&path.span, span, *qualname, scope_id);
             write!(self.out, "{}", sub_mod_str);                                                                        
         }
     }
@@ -268,7 +280,7 @@ impl <'l> DxrVisitor<'l> {
         // variable def's node id
         format!("variable,{},id,{},name,{},qualname,{},value,\"{}\"\n",
                 self.extent_str(span, Some(sub_span)), id, name,
-                name + "$" + id.to_str(), value)
+                name + "$" + id.to_str(), escape(value))
     }
 
     // formal parameters
@@ -281,7 +293,7 @@ impl <'l> DxrVisitor<'l> {
     // value is the initialising expression of the static if it is not mut, otherwise "".
     fn static_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str, value: &str) -> ~str {
         format!("variable,{},id,{},name,{},qualname,{},value,\"{}\"\n",
-                self.extent_str(span, Some(sub_span)), id, name, qualname, value)
+                self.extent_str(span, Some(sub_span)), id, name, qualname, escape(value))
     }
 
     fn field_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, qualname: &str) -> ~str {
@@ -289,9 +301,9 @@ impl <'l> DxrVisitor<'l> {
                 self.extent_str(span, Some(sub_span)), id, name, qualname)
     }
 
-    fn fn_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str) -> ~str {
-        format!("function,{},qualname,{},id,{}\n",
-                self.extent_str(span, Some(sub_span)), name, id)
+    fn fn_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, scope_id: NodeId) -> ~str {
+        format!("function,{},qualname,{},id,{},scopeid,{}\n",
+                self.extent_str(span, Some(sub_span)), name, id, scope_id)
     }
 
     fn method_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, decl_id: Option<DefId>, scope_id: NodeId) -> ~str {
@@ -308,19 +320,19 @@ impl <'l> DxrVisitor<'l> {
                 self.extent_str(span, Some(sub_span)), name, id, scope_id)
     }
 
-    fn struct_str(&self, span: &Span, sub_span: &Span, id: NodeId, ctor_id: NodeId, name: &str) -> ~str {
-        format!("struct,{},id,{},ctor_id,{},qualname,{}\n",
-                self.extent_str(span, Some(sub_span)), id, ctor_id, name)
+    fn struct_str(&self, span: &Span, sub_span: &Span, id: NodeId, ctor_id: NodeId, name: &str, scope_id: NodeId) -> ~str {
+        format!("struct,{},id,{},ctor_id,{},qualname,{},scopeid,{}\n",
+                self.extent_str(span, Some(sub_span)), id, ctor_id, name, scope_id)
     }
 
-    fn trait_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str) -> ~str {
-        format!("trait,{},id,{},qualname,{}\n",
-                self.extent_str(span, Some(sub_span)), id, name)
+    fn trait_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, scope_id: NodeId) -> ~str {
+        format!("trait,{},id,{},qualname,{},scopeid,{}\n",
+                self.extent_str(span, Some(sub_span)), id, name, scope_id)
     }
 
-    fn impl_str(&self, span: &Span, sub_span: &Span, id: NodeId, ref_id: DefId) -> ~str {
-        format!("impl,{},id,{},refid,{},refidcrate,{}\n",
-                self.extent_str(span, Some(sub_span)), id, ref_id.node, ref_id.crate)        
+    fn impl_str(&self, span: &Span, sub_span: &Span, id: NodeId, ref_id: DefId, scope_id: NodeId) -> ~str {
+        format!("impl,{},id,{},refid,{},refidcrate,{},scopeid,{}\n",
+                self.extent_str(span, Some(sub_span)), id, ref_id.node, ref_id.crate, scope_id)        
     }
 
     fn mod_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, parent: NodeId, filename: &str) -> ~str {
@@ -328,19 +340,19 @@ impl <'l> DxrVisitor<'l> {
                 self.extent_str(span, Some(sub_span)), id, name, parent, filename)
     }
 
-    fn mod_alias_str(&self, span: &Span, sub_span: &Span, id: NodeId, mod_id: DefId, name: &str) -> ~str {
-        format!("module_alias,{},id,{},refid,{},refidcrate,{},name,{}\n",
-                self.extent_str(span, Some(sub_span)), id, mod_id.node, mod_id.crate, name)
+    fn mod_alias_str(&self, span: &Span, sub_span: &Span, id: NodeId, mod_id: DefId, name: &str, parent: NodeId) -> ~str {
+        format!("module_alias,{},id,{},refid,{},refidcrate,{},name,{},scopeid,{}\n",
+                self.extent_str(span, Some(sub_span)), id, mod_id.node, mod_id.crate, name, parent)
     }
 
-    fn extern_mod_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, loc: &str) -> ~str {
+    fn extern_mod_str(&self, span: &Span, sub_span: &Span, id: NodeId, name: &str, loc: &str, parent: NodeId) -> ~str {
         let cstore = self.analysis.ty_cx.cstore;
         let cnum = match cstore.find_extern_mod_stmt_cnum(id) {
             Some(cnum) => cnum,
             None => 0,
         };
-        format!("extern_mod,{},id,{},name,{},location,{},crate,{}\n",
-                self.extent_str(span, Some(sub_span)), id, name, loc, cnum)        
+        format!("extern_mod,{},id,{},name,{},location,{},crate,{},scopeid,{}\n",
+                self.extent_str(span, Some(sub_span)), id, name, loc, cnum, parent)        
     }
 
     fn ref_str(&self, kind: &str, span: &Span, sub_span: &Span, id: DefId) -> ~str {
@@ -363,14 +375,14 @@ impl <'l> DxrVisitor<'l> {
         
     }
 
-    fn mod_ref_str(&self, span: &Span, sub_span: Option<&Span>, id: DefId) -> ~str {
-        format!("mod_ref,{},refid,{},refidcrate,{},qualname,\"\"\n",
-                self.extent_str(span, sub_span), id.node, id.crate)
+    fn mod_ref_str(&self, span: &Span, sub_span: Option<&Span>, id: DefId, parent:NodeId) -> ~str {
+        format!("mod_ref,{},refid,{},refidcrate,{},qualname,,scopeid,{}\n",
+                self.extent_str(span, sub_span), id.node, id.crate, parent)
     }
 
-    fn sub_mod_ref_str(&self, span: &Span, sub_span: &Span, qualname: &str) -> ~str {
-        format!("mod_ref,{},refid,0,refidcrate,0,qualname,{}\n",
-                self.extent_str(span, Some(sub_span)), qualname)
+    fn sub_mod_ref_str(&self, span: &Span, sub_span: &Span, qualname: &str, parent:NodeId) -> ~str {
+        format!("mod_ref,{},refid,0,refidcrate,0,qualname,{},scopeid,{}\n",
+                self.extent_str(span, Some(sub_span)), qualname, parent)
     }
 
     fn sub_type_ref_str(&self, span: &Span, sub_span: &Span, qualname: &str) -> ~str {
@@ -418,6 +430,24 @@ impl <'l> DxrVisitor<'l> {
                 println!("could not find {} def {}", kind, ref_id);
                 None
             },
+        }
+    }
+
+    fn process_formals(&mut self, decl: @fn_decl, qualname: &str, e:DxrVisitorEnv) {
+        for arg in decl.inputs.iter() {
+            self.collected_paths.clear();
+            self.visit_pat(arg.pat, e);
+            for &(id, ref p, _) in self.collected_paths.iter() {
+                // get the span only for the name of the variable (I hope the path is only ever a
+                // variable name, but who knows?)
+                let sub_span = self.span_for_name(&p.span);
+                write!(self.out, "{}",
+                       self.formal_str(&p.span,
+                                       &sub_span,
+                                       id,
+                                       qualname,
+                                       path_to_str(p, get_ident_interner())));
+            }
         }
     }
 
@@ -483,22 +513,7 @@ impl <'l> DxrVisitor<'l> {
             None => println("Could not find sub-span for method name"),
         }
 
-        // TODO factor this out (args)
-        for arg in method.decl.inputs.iter() {
-            self.collected_paths.clear();
-            self.visit_pat(arg.pat, e);
-            for &(id, ref p, _) in self.collected_paths.iter() {
-                // get the span only for the name of the variable (I hope the path is only ever a
-                // variable name, but who knows?)
-                let sub_span = self.span_for_name(&p.span);
-                write!(self.out, "{}",
-                       self.formal_str(&p.span,
-                                         &sub_span,
-                                         id,
-                                         qualname,
-                                         path_to_str(p, get_ident_interner())));
-            }
-        }
+        self.process_formals(method.decl, qualname, e);
 
         // explicit self
         let sub_span = self.sub_span_for_keyword(&method.span, keywords::Self);
@@ -540,25 +555,12 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                              self.fn_str(&item.span,
                                                          &sub_span,
                                                          item.id,
-                                                         qualname)),
+                                                         qualname,
+                                                         e.cur_scope)),
                     None => println!("Could not find sub-span for fn name in {}, {}", qualname, self.extent_str(&item.span, None)),
                 }
 
-                for arg in decl.inputs.iter() {
-                    self.collected_paths.clear();
-                    self.visit_pat(arg.pat, e);
-                    for &(id, ref p, _) in self.collected_paths.iter() {
-                        // get the span only for the name of the variable (I hope the path is only ever a
-                        // variable name, but who knows?)
-                        let sub_span = self.span_for_name(&p.span);
-                        write!(self.out, "{}",
-                               self.formal_str(&p.span,
-                                                 &sub_span,
-                                                 id,
-                                                 qualname,
-                                                 path_to_str(p, get_ident_interner())));
-                    }
-                }
+                self.process_formals(decl, qualname, e);
 
                 // walk arg and return types
                 for arg in decl.inputs.iter() {
@@ -617,7 +619,8 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                              self.struct_str(&item.span,
                                                              &sub_span,
                                                              item.id, ctor_id,
-                                                             qualname)),
+                                                             qualname,
+                                                             e.cur_scope)),
                     None => println!("Could not find sub-span for struct {}", qualname),
                 }
 
@@ -653,7 +656,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                             Some(id) => {
                                 let sub_span = self.span_for_name(&path.span);
                                 write!(self.out, "{}",
-                                       self.impl_str(&path.span, &sub_span, item.id, id));
+                                       self.impl_str(&path.span, &sub_span, item.id, id, e.cur_scope));
                             },
                             None => ()
                         }
@@ -669,7 +672,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                 write!(self.out, "{}",
                                        self.ref_str("type_ref", &trait_ref.path.span, &sub_span, id));
                                 write!(self.out, "{}",
-                                       self.impl_str(&trait_ref.path.span, &sub_span, item.id, id));
+                                       self.impl_str(&trait_ref.path.span, &sub_span, item.id, id, e.cur_scope));
                             },
                             None => ()
                         }
@@ -694,7 +697,8 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                              self.trait_str(&item.span,
                                                             &sub_span,
                                                             item.id,
-                                                            qualname)),
+                                                            qualname,
+                                                            e.cur_scope)),
                     None => println!("Could not find sub-span for trait {}", qualname),
                 }
 
@@ -827,7 +831,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
         }
     }
 
-    fn visit_view_item(&mut self, i:&view_item, _e:DxrVisitorEnv) {
+    fn visit_view_item(&mut self, i:&view_item, e:DxrVisitorEnv) {
         match i.node {
             view_item_use(ref paths) => {
                 for vp in paths.iter() {
@@ -837,7 +841,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                             let mod_id = match self.lookup_type_ref(id, "module") {
                                 Some(id) => {
                                     write!(self.out, "{}",
-                                           self.mod_ref_str(&vp.span, Some(&sub_span), id));
+                                           self.mod_ref_str(&vp.span, Some(&sub_span), id, e.cur_scope));
                                     id
                                 },
                                 None => DefId{node:0, crate:0},
@@ -855,30 +859,30 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                    self.mod_alias_str(&vp.span,
                                                       &sub_span,
                                                       id, mod_id,
-                                                      name));
-                            self.write_sub_paths_truncated(path);
+                                                      name,
+                                                      e.cur_scope));
+                            self.write_sub_paths_truncated(path, e.cur_scope);
                         }
                         view_path_glob(ref path, _) => {
-                            self.write_sub_paths(path);
+                            self.write_sub_paths(path, e.cur_scope);
                         }
                         view_path_list(ref path, ref list, _) => {
                             for plid in list.iter() {
                                 match self.lookup_type_ref(plid.node.id, "module") {
                                     Some(id) => {
                                         write!(self.out, "{}",
-                                               self.mod_ref_str(&plid.span, None, id));                                        
+                                               self.mod_ref_str(&plid.span, None, id, e.cur_scope));                                        
                                     },
                                     None => ()
                                 }
                             }
 
-                            self.write_sub_paths(path);
+                            self.write_sub_paths(path, e.cur_scope);
                         }
                     }
                 }
             },
             view_item_extern_mod(ident, s, _, id) => {
-                // TODO introduces an alias like use
                 let name = ident_to_str(&ident);
                 let s = match s {
                     Some((s, _)) => s.to_owned(),
@@ -887,7 +891,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 let sub_span = self.sub_span_after_keyword(&i.span, keywords::Mod);
                 match sub_span {
                     Some(sub_span) => write!(self.out, "{}",
-                        self.extern_mod_str(&i.span, &sub_span, id, name, s)),
+                        self.extern_mod_str(&i.span, &sub_span, id, name, s, e.cur_scope)),
                     None => println!("Could not find ident in extern mod item {}", id),
                 }
             },
@@ -906,7 +910,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     None => ()
                 }
 
-                self.write_sub_paths_truncated(path);
+                self.write_sub_paths_truncated(path, e.cur_scope);
 
                 visit::walk_path(self, path, e);
                 for bounds in bounds.iter() {
@@ -970,8 +974,8 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                         }
                         // modules or types in the path prefix
                         match *d {
-                            ast::DefStaticMethod(_, _, _) => self.write_sub_path_trait_truncated(path),
-                            _ => self.write_sub_paths_truncated(path),
+                            ast::DefStaticMethod(_, _, _) => self.write_sub_path_trait_truncated(path, e.cur_scope),
+                            _ => self.write_sub_paths_truncated(path, e.cur_scope),
                         }
                     },
                     None => println!("Could not find path {}", ex.id),
@@ -1006,7 +1010,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     None => ()
                 }
 
-                self.write_sub_paths_truncated(path);
+                self.write_sub_paths_truncated(path, e.cur_scope);
 
                 for field in fields.iter() {
                     match struct_def {
