@@ -15,6 +15,7 @@ use driver::driver::CrateAnalysis;
 use driver::session::Session;
 use middle::ty;
 use middle::typeck;
+
 use syntax::ast;
 use syntax::ast::*;
 use syntax::ast_map::*;
@@ -89,6 +90,7 @@ impl <'l> DxrVisitor<'l> {
                 hi_pos = *cph;
             }
         }
+
         return format!("file_name,{},file_line,{},file_col,{},extent_start,{},file_line_end,{},file_col_end,{},extent_end,{}",
                        lo_loc.file.name, lo_loc.line, *lo_loc.col, lo_pos,
                        hi_loc.line, *hi_loc.col, hi_pos);
@@ -299,11 +301,7 @@ impl <'l> DxrVisitor<'l> {
             self.extent_str(span, Some(sub_span)), id, name, qualname, val)
     }
 
-    fn cvariant_str(&self, span: &Span, id: NodeId, name: &str, qualname: &str, val: &str) -> ~str {
-        format!("variant,{},id,{},name,{},qualname,{},value,\"{}\"\n",
-            self.extent_str(span, None), id, name, qualname, val)
-    }
-
+    // value is the initialising expression of the static if it is not mut, otherwise "".
     fn struct_variant_str(&self, span: &Span, sub_span: &Span, id: NodeId, ctor_id: NodeId, name: &str, val: &str) -> ~str {
         format!("variant_struct,{},id,{},ctor_id,{},qualname,{},value,\"{}\"\n",
                 self.extent_str(span, Some(sub_span)), id, ctor_id, name, val)
@@ -555,6 +553,21 @@ impl <'l> DxrVisitor<'l> {
 
         // TODO type params
     }
+    fn process_struct_field_def(&mut self, field: &ast::struct_field, qualname: &str) {
+        match field.node.kind {
+            named_field(ref ident, _) => {
+                let name = ident_to_str(ident);
+                let qualname = qualname + "::" + name;
+                match self.sub_span_before_token(&field.span, COLON) {
+                    Some(ref sub_span) => write!(self.out, "{}",
+                    self.field_str(&field.span, sub_span, field.node.id,
+                                   name, qualname)),
+                    None => println!("Could not find sub-span for field {}", qualname),
+                }
+            },
+            _ => (),
+        }
+    }
 }
 
 impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
@@ -654,22 +667,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
 
                 // fields
                 for field in def.fields.iter() {
-                    match field.node.kind {
-                        named_field(ref ident, _) => {
-                            let name = ident_to_str(ident);
-                            let qualname = qualname + "::" + name;
-                            match self.sub_span_before_token(&field.span, COLON) {
-                                Some(ref sub_span) => write!(self.out, "{}",
-                                                             self.field_str(&field.span,
-                                                                            sub_span,
-                                                                            field.node.id,
-                                                                            name,
-                                                                            qualname)),
-                                None => println!("Could not find sub-span for field {}", qualname),
-                            }
-                        },
-                        _ => (),
-                    }
+                    self.process_struct_field_def(field, qualname);
                 }
 
                 // TODO walk type params
@@ -681,7 +679,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 };
                 match self.sub_span_after_keyword(&item.span, keywords::Enum) {
                     Some(ref sub_span) => write!(self.out, "{}", self.enum_str(
-                                            &item.span, sub_span, item.id, qualname)),
+                                                 &item.span, sub_span, item.id, qualname)),
                     None => println!("Could not find subspan for enum {}", qualname),
                 }
                 for &variant in enum_definition.variants.iter() {
@@ -697,16 +695,25 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                             // if it's a tuple of types, match the left paren
                             match self.sub_span_before_token(&variant.span, EQ) {
                                 Some(sub_span) => write!(self.out,"{}",
-                                        self.tuple_variant_str(&variant.span, &sub_span,
-                                        variant.node.id, name, qualname, val)),
+                                                         self.tuple_variant_str(&variant.span,
+                                                                                &sub_span,
+                                                                                variant.node.id,
+                                                                                name,
+                                                                                qualname, val)),
                                 None => match self.sub_span_before_token(&variant.span, LPAREN) {
-                                    Some(sub_span) => write!(self.out,"{}", self.tuple_variant_str(
-                                        &variant.span, &sub_span, variant.node.id, name, qualname, val)),
-                                    None => write!(self.out,"{}", self.cvariant_str(&variant.span,
-                                            variant.node.id, name, qualname, "")),
+                                    Some(sub_span) => write!(self.out,"{}",
+                                                             self.tuple_variant_str(&variant.span,
+                                                                                    &sub_span,
+                                                                                    variant.node.id,
+                                                                                    name,
+                                                                                    qualname, val)),
+                                    None => write!(self.out,"{}",
+                                                   self.tuple_variant_str(&variant.span,
+                                                   &self.span_for_name(&variant.span),
+                                                   variant.node.id, name, qualname, "")),
                                 },
                             }
-                            for &arg in args.iter() {
+                            for arg in args.iter() {
                                 self.visit_ty(arg.ty, e);
                             }
                         }
@@ -723,19 +730,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                 None => println!("Could not find sub-span for struct {}", qualname),
                             }
                             for field in struct_def.fields.iter() {
-                                match field.node.kind {
-                                    named_field(ref ident, _) => {
-                                        let name = ident_to_str(ident);
-                                        let qualname = qualname + "::" + name;
-                                        match self.sub_span_before_token(&field.span, COLON) {
-                                            Some(ref sub_span) => write!(self.out, "{}",
-                                            self.field_str(&field.span, sub_span, field.node.id,
-                                                            name, qualname)),
-                                            None => println!("Could not find sub-span for field {}", qualname),
-                                        }
-                                    },
-                                    _ => (),
-                                }
+                                self.process_struct_field_def(field, qualname);
                                 self.visit_ty(field.node.ty, e);
                             }
                         }
@@ -1066,11 +1061,15 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                        self.meth_call_str(&ex.span, &sub_span, defid, Some(declid), e.cur_scope));                                
                             }
                             ast::DefFn(def_id, _) => write!(self.out, "{}",
-                                self.fn_call_str(&ex.span, &sub_span, def_id, e.cur_scope)),
-                            ast::DefVariant(_, variant_id, _) => if variant_id.crate == 0 {
-                                write!(self.out, "{}",
-                                self.ref_str("var_ref", &ex.span, &sub_span, variant_id));
-                            },
+                                                            self.fn_call_str(&ex.span,
+                                                                             &sub_span,
+                                                                             def_id,
+                                                                             e.cur_scope)),
+                            ast::DefVariant(_, variant_id, _) => write!(self.out, "{}",
+                                                                        self.ref_str("var_ref",
+                                                                                     &ex.span,
+                                                                                     &sub_span,
+                                                                                     variant_id)),
                            _ => println!("Unexpected def kind while looking up path {}", ex.id),
                         }
                         // modules or types in the path prefix
@@ -1211,14 +1210,12 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 let def = def_map.get().find(&p.id);
                 let sub_span = match self.sub_span_before_token(&p.span, LBRACE) {
                     Some(ss) => ss,
-                    None => p.span.clone(),
+                    None => self.span_for_name(&p.span),
                 };
                 match def {
                     Some(&def) => match def {
-                        ast::DefVariant(_, v_id, _) => if v_id.crate == 0 {
-                            write!(self.out, "{}", self.ref_str("struct_ref",
-                                &p.span, &sub_span, v_id));
-                        },
+                        ast::DefVariant(_, v_id, _) => write!(self.out, "{}", self.ref_str("struct_ref",
+                                                              &p.span, &sub_span, v_id)),
                         _ => println!("Struct pattern {} not a variant.", p.id)
                     },
                     _ => println!("Could not find definition for struct pattern {}.", p.id),
@@ -1258,14 +1255,12 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 let def = def_map.get().find(&p.id);
                 let sub_span = match self.sub_span_before_token(&p.span, LPAREN) {
                     Some(ss) => ss,
-                    None => p.span.clone(),
+                    None => self.span_for_name(&p.span),
                 };
                 match def {
                     Some(&def) => match def {
-                        ast::DefVariant(_, v_id, _) => if v_id.crate == 0 {
-                            write!(self.out, "{}",
-                            self.ref_str("var_ref", &p.span, &sub_span, v_id));
-                        },
+                        ast::DefVariant(_, v_id, _) => write!(self.out, "{}", self.ref_str(
+                                                              "var_ref", &p.span, &sub_span, v_id)),
                         _ => println!("No variant definition found for {}", p.id),
                     },
                     _ => println!("No definition found for pattern {}", p.id),
