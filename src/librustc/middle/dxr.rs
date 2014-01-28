@@ -1027,8 +1027,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                         match *d {
                             ast::DefLocal(id, _) |
                             ast::DefArg(id, _) |
-                            ast::DefBinding(id, _) | 
-                            ast::DefUpvar(id, _, _, _) => write!(self.out, "{}",
+                            ast::DefBinding(id, _) => write!(self.out, "{}",
                                 self.ref_str("var_ref", &ex.span, &sub_span, DefId{node:id, crate:0})),
                             ast::DefStatic(def_id,_) => write!(self.out, "{}",
                                 self.ref_str("var_ref", &ex.span, &sub_span, def_id)),
