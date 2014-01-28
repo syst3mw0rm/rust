@@ -132,6 +132,20 @@ impl <'l> DxrVisitor<'l> {
         }
     }
 
+    fn span_for_ident(&self, span: &Span) -> Span {
+        //! Return the span for the first identifier in the path.
+        let toks = self.retokenise_span(span);
+        loop {
+            let ts = toks.next_token();
+            if ts.tok == EOF {
+                return *span;
+            }
+            if is_ident(&ts.tok) || is_keyword(keywords::Self, &ts.tok) {
+                return ts.sp;
+            }
+        }
+    }
+
     fn sub_span_before_token(&self, span: &Span, tok: Token) -> Option<Span> {
         let toks = self.retokenise_span(span);
         let mut prev = toks.next_token();
@@ -691,28 +705,11 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     };
                     match variant.node.kind {
                         tuple_variant_kind(ref args) => {
-                            // if it's just a constant, match equal sign
-                            // if it's a tuple of types, match the left paren
-                            match self.sub_span_before_token(&variant.span, EQ) {
-                                Some(sub_span) => write!(self.out,"{}",
-                                                         self.tuple_variant_str(&variant.span,
-                                                                                &sub_span,
-                                                                                variant.node.id,
-                                                                                name,
-                                                                                qualname, val)),
-                                None => match self.sub_span_before_token(&variant.span, LPAREN) {
-                                    Some(sub_span) => write!(self.out,"{}",
-                                                             self.tuple_variant_str(&variant.span,
-                                                                                    &sub_span,
-                                                                                    variant.node.id,
-                                                                                    name,
-                                                                                    qualname, val)),
-                                    None => write!(self.out,"{}",
-                                                   self.tuple_variant_str(&variant.span,
-                                                   &self.span_for_name(&variant.span),
-                                                   variant.node.id, name, qualname, "")),
-                                },
-                            }
+                            // first ident in span is the variant's name
+                            write!(self.out, "{}",
+                                   self.tuple_variant_str(&variant.span,
+                                                          &self.span_for_ident(&variant.span),
+                                                          variant.node.id, name, qualname, val));
                             for arg in args.iter() {
                                 self.visit_ty(arg.ty, e);
                             }
@@ -1281,21 +1278,8 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                         }
                     }
                 };
+                // collect path for either visit_local or visit_arm
                 self.collected_paths.push((p.id, path.clone(), immut));
-                let def_map = self.analysis.ty_cx.def_map.borrow();
-                let def = def_map.get().find(&p.id);
-                let sub_span = self.span_for_name(&p.span);
-                match def {
-                    Some(&def) => match def {
-                        ast::DefBinding(id, _) => write!(self.out, "{}",
-                                self.variable_str(&p.span, &sub_span, id,
-                                path_to_str(path, get_ident_interner()),"")),
-                        ast::DefVariant(_,id,_) => write!(self.out, "{}",
-                                self.ref_str("var_ref",&p.span, &sub_span, id)),
-                        _ => (),
-                    },
-                    _ => (),
-                }
                 match *optional_subpattern {
                     None => {}
                     Some(subpattern) => self.visit_pat(subpattern, e),
@@ -1305,6 +1289,40 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
         }
     }
 
+    fn visit_arm(&mut self, arm: &ast::Arm, e: DxrVisitorEnv) {
+        //! Visit a match arm and write arm bindings and variants to csv.
+        self.collected_paths.clear();
+        for pattern in arm.pats.iter() {
+            // collect paths from the arm's patterns
+            self.visit_pat(*pattern, e);
+        }
+        // process collected paths
+        for &(id,ref p, ref immut) in self.collected_paths.iter() {
+            let value = match self.sess.codemap.span_to_snippet(p.span) {
+                Some(s) => if *immut { s.to_owned() } else { ~"" },
+                None => ~"",
+            };
+            let sub_span = self.span_for_name(&p.span);
+            let def_map = self.analysis.ty_cx.def_map.borrow();
+            let def = def_map.get().find(&id);
+            match def {
+                Some(&def) => match def {
+                    ast::DefBinding(id, _) => write!(self.out, "{}",
+                                              self.variable_str(&p.span,
+                                                                &sub_span, id,
+                                                                path_to_str(p, get_ident_interner()),
+                                                                value)),
+                    ast::DefVariant(_,id,_) => write!(self.out, "{}",
+                                               self.ref_str("var_ref",
+                                                            &p.span, &sub_span, id)),
+                    _ => (),
+                },
+                _ => (),
+            }
+        }
+        visit::walk_expr_opt(self, arm.guard, e);
+        self.visit_block(arm.body, e);
+    }
     fn visit_local(&mut self, l:@Local, e: DxrVisitorEnv) {
         // the local could declare multiple new vars, we must walk the pattern and collect them all
         self.collected_paths.clear();
