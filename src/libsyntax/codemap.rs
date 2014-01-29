@@ -412,6 +412,12 @@ impl CodeMap {
                 a = m;
             }
         }
+        // There can be filemaps with length 0. These have the same start_pos as the previous
+        // filemap, but are not the filemaps we want (because they are length 0, they cannot
+        // contain what we are looking for). So, rewind until we find a useful filemap.
+        while a > 0 && self.files[a].lines.len() == 0 {
+            a -= 1;
+        }
         if (a >= len) {
             fail!("position {} does not resolve to a source location", pos.to_uint())
         }

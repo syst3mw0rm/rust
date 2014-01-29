@@ -104,14 +104,7 @@ pub fn expand_include_str(cx: &mut ExtCtxt, sp: Span, tts: &[ast::token_tree])
             let s = s.to_managed();
             // Add this input file to the code map to make it available as
             // dependency information
-            cx.parse_sess.cm.files.push(@codemap::FileMap {
-                name: file.display().to_str().to_managed(),
-                substr: codemap::FssNone,
-                src: s,
-                start_pos: codemap::BytePos(0),
-                lines: @mut ~[],
-                multibyte_chars: @mut ~[],
-            });
+            cx.parse_sess.cm.new_filemap(file.display().to_str().to_managed(), s);
             base::MRExpr(cx.expr_str(sp, s))
         }
         None => {
