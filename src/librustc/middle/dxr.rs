@@ -24,7 +24,7 @@ use syntax::codemap::*;
 use syntax::diagnostic;
 use syntax::parse::lexer;
 use syntax::parse::lexer::{reader, StringReader};
-use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,is_ident,Token,EOF,EQ,LPAREN,COLON,LT,GT,LBRACE,COMMA,to_str};
+use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,is_ident,Token,EOF,EQ,LPAREN,COLON,LT,GT,LBRACE};
 use syntax::visit;
 use syntax::visit::Visitor;
 use syntax::print::pprust::{path_to_str,ty_to_str};
@@ -161,18 +161,21 @@ impl <'l> DxrVisitor<'l> {
         }
     }
 
-    // this is so bad...
-    fn sub_span_after_token(&self, span: &Span, tok: Token) -> Span {
-        let mut new_span = span.clone();
-        while new_span.lo < new_span.hi {
-            if self.sess.codemap.span_to_snippet(Span{
-                    lo:new_span.lo, hi:new_span.lo+BytePos(1),
-                    expn_info: new_span.expn_info}).unwrap() == to_str(get_ident_interner(), &tok) {
-                return new_span;
+    fn split_span_on_token(&self, span: &Span, tok: Token) -> ~[Span] {
+        //! Return an owned vector of the subspans of the tokens that precede
+        //! each occurrence of tok.
+        let mut split_spans : ~[Span] = ~[];
+        let toks = self.retokenise_span(span);
+        let mut prev = toks.next_token();
+        let mut next = toks.next_token();
+        while next.tok != EOF {
+            if next.tok == tok {
+                split_spans.push(prev.sp);
             }
-            new_span.lo = new_span.lo + BytePos(1);
+            prev = next;
+            next = toks.next_token();
         }
-        return new_span;
+        return split_spans;
     }
 
     fn sub_span_after_keyword(&self, span: &Span, keyword: keywords::Keyword) -> Option<Span> {
@@ -1219,31 +1222,29 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 visit::walk_path(self, path, e);
                 let struct_def = self.lookup_type_ref(p.id, "struct");
                 // the AST doesn't give us a span for the struct field, so we have
-                // to figure out where it is by assuming it comes before colons
-                // first shorten field span to its opening brace
-                let mut field_span = self.sub_span_after_token(&p.span, LBRACE);
+                // to figure out where it is by assuming it's the token before each colon
+                let split_spans = self.split_span_on_token(&p.span, COLON);
+                let mut ns = 0;
                 for field in fields.iter() {
                     match struct_def {
                         Some(struct_def) => {
                             let fields = ty::lookup_struct_fields(self.analysis.ty_cx, struct_def);
                             for f in fields.iter() {
                                 if f.name == field.ident.name {
-                                    // use text up to colon as subspan
-                                    match self.sub_span_before_token(&field_span, COLON) {
-                                        Some(fs) => {
-                                            write!(self.out, "{}",
-                                                self.ref_str("var_ref", &field_span, &fs, f.id));
-                                        },
-                                        None => (),
-                                    }
-                                    // shorten field_span to the next comma
-                                    field_span = self.sub_span_after_token(&field_span, COMMA);
+                                    write!(self.out, "{}", self.ref_str("var_ref",
+                                                                        &p.span,
+                                                                        &split_spans[ns],
+                                                                        f.id));
                                 }
                             }
                         },
                         _ => (),
                     }
                     self.visit_pat(field.pat, e);
+                    ns += 1;
+                    if ns >= split_spans.len() {
+                        break;
+                    }
                 }
             }
             PatEnum(ref path, ref children) => {
