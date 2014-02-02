@@ -161,21 +161,21 @@ impl <'l> DxrVisitor<'l> {
         }
     }
 
-    fn split_span_on_token(&self, span: &Span, tok: Token) -> ~[Span] {
+    fn all_sub_spans_before_token(&self, span: &Span, tok: Token) -> ~[Span] {
         //! Return an owned vector of the subspans of the tokens that precede
         //! each occurrence of tok.
-        let mut split_spans : ~[Span] = ~[];
+        let mut sub_spans : ~[Span] = ~[];
         let toks = self.retokenise_span(span);
         let mut prev = toks.next_token();
         let mut next = toks.next_token();
         while next.tok != EOF {
             if next.tok == tok {
-                split_spans.push(prev.sp);
+                sub_spans.push(prev.sp);
             }
             prev = next;
             next = toks.next_token();
         }
-        return split_spans;
+        return sub_spans;
     }
 
     fn sub_span_after_keyword(&self, span: &Span, keyword: keywords::Keyword) -> Option<Span> {
@@ -1223,7 +1223,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 let struct_def = self.lookup_type_ref(p.id, "struct");
                 // the AST doesn't give us a span for the struct field, so we have
                 // to figure out where it is by assuming it's the token before each colon
-                let split_spans = self.split_span_on_token(&p.span, COLON);
+                let field_spans = self.all_sub_spans_before_token(&p.span, COLON);
                 let mut ns = 0;
                 for field in fields.iter() {
                     match struct_def {
@@ -1233,7 +1233,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                 if f.name == field.ident.name {
                                     write!(self.out, "{}", self.ref_str("var_ref",
                                                                         &p.span,
-                                                                        &split_spans[ns],
+                                                                        &field_spans[ns],
                                                                         f.id));
                                 }
                             }
@@ -1242,7 +1242,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     }
                     self.visit_pat(field.pat, e);
                     ns += 1;
-                    if ns >= split_spans.len() {
+                    if ns >= field_spans.len() {
                         break;
                     }
                 }
