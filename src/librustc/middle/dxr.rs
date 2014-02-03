@@ -24,7 +24,7 @@ use syntax::codemap::*;
 use syntax::diagnostic;
 use syntax::parse::lexer;
 use syntax::parse::lexer::{reader, StringReader};
-use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,is_ident,Token,EOF,EQ,LPAREN,COLON,LT,GT,LBRACE};
+use syntax::parse::token::{get_ident_interner,ident_to_str,is_keyword,keywords,is_ident,Token,EOF,EQ,COLON,LT,GT};
 use syntax::visit;
 use syntax::visit::Visitor;
 use syntax::print::pprust::{path_to_str,ty_to_str};
@@ -40,7 +40,7 @@ struct DxrVisitor<'l> {
     sess: Session,
     analysis: &'l CrateAnalysis,
 
-    collected_paths: ~[(NodeId, ast::Path, bool)],
+    collected_paths: ~[(NodeId, ast::Path, bool, &'l str)],
 
     // output file
     out: ~Writer,
@@ -533,7 +533,7 @@ impl <'l> DxrVisitor<'l> {
         for arg in method.decl.inputs.iter() {
             self.collected_paths.clear();
             self.visit_pat(arg.pat, e);
-            for &(id, ref p, _) in self.collected_paths.iter() {
+            for &(id, ref p, _, _) in self.collected_paths.iter() {
                 // get the span only for the name of the variable (I hope the path is only ever a
                 // variable name, but who knows?)
                 let sub_span = self.span_for_name(&p.span);
@@ -608,7 +608,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 for arg in decl.inputs.iter() {
                     self.collected_paths.clear();
                     self.visit_pat(arg.pat, e);
-                    for &(id, ref p, _) in self.collected_paths.iter() {
+                    for &(id, ref p, _, _) in self.collected_paths.iter() {
                         // get the span only for the name of the variable (I hope the path is only ever a
                         // variable name, but who knows?)
                         let sub_span = self.span_for_name(&p.span);
@@ -722,13 +722,11 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                 Some(node_id) => node_id,
                                 None => 0,
                             };
-                            match self.sub_span_before_token(&variant.span, LBRACE) {
-                                Some(sub_span) => write!(self.out, "{}",
-                                                        self.struct_variant_str(&variant.span,
-                                                        &sub_span, variant.node.id, ctor_id,
-                                                        qualname, val)),
-                                None => println!("Could not find sub-span for struct {}", qualname),
-                            }
+                            write!(self.out, "{}",
+                                   self.struct_variant_str(&variant.span,
+                                                           &self.span_for_ident(&variant.span),
+                                                           variant.node.id, ctor_id,
+                                                           qualname, val));
                             for field in struct_def.fields.iter() {
                                 self.process_struct_field_def(field, qualname);
                                 self.visit_ty(field.node.ty, e);
@@ -1205,20 +1203,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
     fn visit_pat(&mut self, p:&Pat, e: DxrVisitorEnv) {
         match p.node {
             PatStruct(ref path, ref fields, _) => {
-                let def_map = self.analysis.ty_cx.def_map.borrow();
-                let def = def_map.get().find(&p.id);
-                let sub_span = match self.sub_span_before_token(&p.span, LBRACE) {
-                    Some(ss) => ss,
-                    None => self.span_for_name(&p.span),
-                };
-                match def {
-                    Some(&def) => match def {
-                        ast::DefVariant(_, v_id, _) => write!(self.out, "{}", self.ref_str("struct_ref",
-                                                              &p.span, &sub_span, v_id)),
-                        _ => println!("Struct pattern {} not a variant.", p.id)
-                    },
-                    _ => println!("Could not find definition for struct pattern {}.", p.id),
-                }
+                self.collected_paths.push((p.id, path.clone(), false, "struct_ref"));
                 visit::walk_path(self, path, e);
                 let struct_def = self.lookup_type_ref(p.id, "struct");
                 // the AST doesn't give us a span for the struct field, so we have
@@ -1248,20 +1233,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 }
             }
             PatEnum(ref path, ref children) => {
-                let def_map = self.analysis.ty_cx.def_map.borrow();
-                let def = def_map.get().find(&p.id);
-                let sub_span = match self.sub_span_before_token(&p.span, LPAREN) {
-                    Some(ss) => ss,
-                    None => self.span_for_name(&p.span),
-                };
-                match def {
-                    Some(&def) => match def {
-                        ast::DefVariant(_, v_id, _) => write!(self.out, "{}", self.ref_str(
-                                                              "var_ref", &p.span, &sub_span, v_id)),
-                        _ => println!("No variant definition found for {}", p.id),
-                    },
-                    _ => println!("No definition found for pattern {}", p.id),
-                }
+                self.collected_paths.push((p.id, path.clone(), false, "var_ref"));
                 visit::walk_path(self, path, e);
                 for children in children.iter() {
                     for child in children.iter() {
@@ -1280,7 +1252,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     }
                 };
                 // collect path for either visit_local or visit_arm
-                self.collected_paths.push((p.id, path.clone(), immut));
+                self.collected_paths.push((p.id, path.clone(), immut, "var_ref"));
                 match *optional_subpattern {
                     None => {}
                     Some(subpattern) => self.visit_pat(subpattern, e),
@@ -1298,12 +1270,12 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
             self.visit_pat(*pattern, e);
         }
         // process collected paths
-        for &(id,ref p, ref immut) in self.collected_paths.iter() {
+        for &(id,ref p, ref immut, ref_kind) in self.collected_paths.iter() {
             let value = match self.sess.codemap.span_to_snippet(p.span) {
                 Some(s) => if *immut { s.to_owned() } else { ~"" },
                 None => ~"",
             };
-            let sub_span = self.span_for_name(&p.span);
+            let sub_span = self.span_for_ident(&p.span);
             let def_map = self.analysis.ty_cx.def_map.borrow();
             let def = def_map.get().find(&id);
             match def {
@@ -1314,7 +1286,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                                                 path_to_str(p, get_ident_interner()),
                                                                 value)),
                     ast::DefVariant(_,id,_) => write!(self.out, "{}",
-                                               self.ref_str("var_ref",
+                                               self.ref_str(ref_kind,
                                                             &p.span, &sub_span, id)),
                     _ => (),
                 },
@@ -1334,7 +1306,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
             None => ~"",
         };
 
-        for &(id,ref p, ref immut) in self.collected_paths.iter() {
+        for &(id,ref p, ref immut, _) in self.collected_paths.iter() {
             let value = if *immut { value.to_owned() } else { ~"" };
             // get the span only for the name of the variable (I hope the path is only ever a
             // variable name, but who knows?)
