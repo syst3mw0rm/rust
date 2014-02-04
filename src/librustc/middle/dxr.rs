@@ -1304,26 +1304,28 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 // the AST doesn't give us a span for the struct field, so we have
                 // to figure out where it is by assuming it's the token before each colon
                 let field_spans = self.all_sub_spans_before_token(&p.span, COLON);
-                let mut ns = 0;
-                for field in fields.iter() {
-                    match struct_def {
-                        Some(struct_def) => {
-                            let fields = ty::lookup_struct_fields(self.analysis.ty_cx, struct_def);
-                            for f in fields.iter() {
-                                if f.name == field.ident.name {
-                                    write!(self.out, "{}", self.ref_str("var_ref",
-                                                                        &p.span,
-                                                                        &field_spans[ns],
-                                                                        f.id));
+                if field_spans.len() > 0 {
+                    let mut ns = 0;
+                    for field in fields.iter() {
+                        match struct_def {
+                            Some(struct_def) => {
+                                let fields = ty::lookup_struct_fields(self.analysis.ty_cx, struct_def);
+                                for f in fields.iter() {
+                                    if f.name == field.ident.name {
+                                        write!(self.out, "{}", self.ref_str("var_ref",
+                                                                            &p.span,
+                                                                            &field_spans[ns],
+                                                                            f.id));
+                                    }
                                 }
-                            }
-                        },
-                        _ => (),
-                    }
-                    self.visit_pat(field.pat, e);
-                    ns += 1;
-                    if ns >= field_spans.len() {
-                        break;
+                            },
+                            _ => (),
+                        }
+                        self.visit_pat(field.pat, e);
+                        ns += 1;
+                        if ns >= field_spans.len() {
+                            break;
+                        }
                     }
                 }
             }
