@@ -482,11 +482,6 @@ impl <'l> DxrVisitor<'l> {
                 ast::DefStruct(def_id) |
                 ast::DefVariant(_,def_id,_) |
                 ast::DefTrait(def_id) => Some(def_id),
-                ast::DefVariant(_, _, _) => {
-                    // FIXME
-                    println!("found variant in {} lookup", kind);
-                    None
-                },
                 DefSelfTy(_) |
                 DefPrimTy(_) |
                 DefTyParam(_, _) => {
@@ -612,7 +607,7 @@ impl <'l> DxrVisitor<'l> {
         // TODO type params
     }
 
-    fn process_struct_field_def(&mut self, field: &ast::struct_field, qualname: &str) {
+    fn process_struct_field_def(&mut self, field: &ast::struct_field, qualname: &str, scope_id: NodeId) {
         match field.node.kind {
             named_field(ref ident, _) => {
                 let name = ident_to_str(ident);
@@ -624,7 +619,7 @@ impl <'l> DxrVisitor<'l> {
                                                                 field.node.id,
                                                                 name,
                                                                 qualname,
-                                                                item.id)),
+                                                                scope_id)),
                     None => println!("Could not find sub-span for field {}", qualname),
                 }
             },
@@ -719,14 +714,14 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                                              &sub_span,
                                                              item.id, ctor_id,
                                                              qualname,
-                                                             e.cur_scope,
-                                                             "")),
+                                                             "",
+                                                             e.cur_scope)),
                     None => println!("Could not find sub-span for struct {}", qualname),
                 }
 
                 // fields
                 for field in def.fields.iter() {
-                    self.process_struct_field_def(field, qualname);
+                    self.process_struct_field_def(field, qualname, item.id);
                 }
 
                 // TODO walk type params
@@ -737,8 +732,12 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     _ => ~""
                 };
                 match self.sub_span_after_keyword(&item.span, keywords::Enum) {
-                    Some(ref sub_span) => write!(self.out, "{}", self.enum_str(
-                                                 &item.span, sub_span, item.id, qualname)),
+                    Some(ref sub_span) => write!(self.out, "{}",
+                                                 self.enum_str(&item.span,
+                                                               sub_span,
+                                                               item.id,
+                                                               qualname,
+                                                               e.cur_scope)),
                     None => println!("Could not find subspan for enum {}", qualname),
                 }
                 for &variant in enum_definition.variants.iter() {
@@ -754,7 +753,11 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                             write!(self.out, "{}",
                                    self.tuple_variant_str(&variant.span,
                                                           &self.span_for_ident(&variant.span),
-                                                          variant.node.id, name, qualname, val));
+                                                          variant.node.id,
+                                                          name,
+                                                          qualname,
+                                                          val,
+                                                          item.id));
                             for arg in args.iter() {
                                 self.visit_ty(arg.ty, e);
                             }
@@ -766,13 +769,17 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                             };
                             match self.sub_span_before_token(&variant.span, LBRACE) {
                                 Some(sub_span) => write!(self.out, "{}",
-                                                        self.struct_variant_str(&variant.span,
-                                                        &sub_span, variant.node.id, ctor_id,
-                                                        qualname, val)),
+                                                         self.struct_variant_str(&variant.span,
+                                                                                 &sub_span,
+                                                                                 variant.node.id,
+                                                                                 ctor_id,
+                                                                                 qualname,
+                                                                                 val,
+                                                                                 item.id)),
                                 None => println!("Could not find sub-span for struct {}", qualname),
                             }
                             for field in struct_def.fields.iter() {
-                                self.process_struct_field_def(field, qualname);
+                                self.process_struct_field_def(field, qualname, item.id);
                                 self.visit_ty(field.node.ty, e);
                             }
                         }
@@ -1126,14 +1133,12 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                                                              &sub_span,
                                                                              def_id,
                                                                              e.cur_scope)),
-                            //TODO
                             ast::DefVariant(_, variant_id, _) => write!(self.out, "{}",
                                                                         self.ref_str("var_ref",
                                                                                      &ex.span,
                                                                                      &sub_span,
                                                                                      variant_id)),
-                            ast::DefBinding(_, _) => (), // FIXME
-                            ast::DefTyParamBinder(_) => (), // FIXME
+                            //TODO
                             ast::DefUpvar(_,  // id of closed over var
                                       _,     // closed over def
                                       _,  // expr node that creates the closure
