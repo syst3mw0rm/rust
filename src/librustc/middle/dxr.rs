@@ -504,7 +504,7 @@ impl <'l> DxrVisitor<'l> {
         for arg in decl.inputs.iter() {
             self.collected_paths.clear();
             self.visit_pat(arg.pat, e);
-            for &(id, ref p, _) in self.collected_paths.iter() {
+            for &(id, ref p, _, _) in self.collected_paths.iter() {
                 // get the span only for the name of the variable (I hope the path is only ever a
                 // variable name, but who knows?)
                 let sub_span = self.span_for_name(&p.span);
@@ -712,7 +712,8 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     Some(sub_span) => write!(self.out, "{}",
                                              self.struct_str(&item.span,
                                                              &sub_span,
-                                                             item.id, ctor_id,
+                                                             item.id,
+                                                             ctor_id,
                                                              qualname,
                                                              "",
                                                              e.cur_scope)),
@@ -778,7 +779,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                                            item.id));
 
                             for field in struct_def.fields.iter() {
-                                self.process_struct_field_def(field, qualname, item.id);
+                                self.process_struct_field_def(field, qualname, variant.node.id);
                                 self.visit_ty(field.node.ty, e);
                             }
                         }
