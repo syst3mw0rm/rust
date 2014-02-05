@@ -149,6 +149,7 @@ pub struct Options {
     extra_debuginfo: bool,
     lint_opts: ~[(lint::Lint, lint::level)],
     save_temps: bool,
+    save_analysis: bool,
     output_type: back::link::OutputType,
     // This was mutable for rustpkg, which updates search paths based on the
     // parsed code. It remains mutable in case its replacements wants to use
@@ -383,6 +384,7 @@ pub fn basic_options() -> @Options {
         extra_debuginfo: false,
         lint_opts: ~[],
         save_temps: false,
+        save_analysis: false,
         output_type: link::OutputTypeExe,
         addl_lib_search_paths: @RefCell::new(HashSet::new()),
         ar: None,
