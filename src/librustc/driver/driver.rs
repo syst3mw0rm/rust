@@ -357,6 +357,17 @@ pub fn phase_3_run_analysis_passes(sess: Session,
     }
 }
 
+pub fn phase_dxr(sess: Session,
+                 crate: &ast::Crate,
+                 analysis: &CrateAnalysis,
+                 odir: &Option<Path>) {
+    if !sess.opts.save_analysis {
+        return;
+    }
+    time(sess.time_passes(), "dxr output", crate, |crate|
+         middle::dxr::process_crate(sess, crate, analysis, odir));
+}
+
 pub struct CrateTranslation {
     context: ContextRef,
     module: ModuleRef,
@@ -529,6 +540,7 @@ pub fn compile_input(sess: Session, cfg: ast::CrateConfig, input: &Input,
         if stop_after_phase_2(sess) { return; }
 
         let analysis = phase_3_run_analysis_passes(sess, &expanded_crate, ast_map);
+        phase_dxr(sess, &expanded_crate, &analysis, outdir);
         if stop_after_phase_3(sess) { return; }
         let trans = phase_4_translate_to_llvm(sess, expanded_crate,
                                               &analysis, &outputs);
@@ -825,6 +837,7 @@ pub fn build_session_options(binary: ~str,
     let target_cpu = matches.opt_str("target-cpu").unwrap_or(~"generic");
     let target_feature = matches.opt_str("target-feature").unwrap_or(~"");
     let save_temps = matches.opt_present("save-temps");
+    let save_analysis = matches.opt_present("save-analysis");
     let opt_level = {
         if (debugging_opts & session::NO_OPT) != 0 {
             No
@@ -901,6 +914,7 @@ pub fn build_session_options(binary: ~str,
         extra_debuginfo: extra_debuginfo,
         lint_opts: lint_opts,
         save_temps: save_temps,
+        save_analysis: save_analysis,
         output_types: output_types,
         addl_lib_search_paths: @RefCell::new(addl_lib_search_paths),
         ar: ar,
@@ -1050,6 +1064,9 @@ pub fn optgroups() -> ~[getopts::OptGroup] {
                         "Output dependency info to <filename> after compiling", "FILENAME"),
   optflag("", "save-temps",
                         "Write intermediate files (.bc, .opt.bc, .o)
+                          in addition to normal output"),
+  optflag("", "save-analysis",
+                        "Write syntax and type analysis information
                           in addition to normal output"),
   optopt("", "sysroot",
                         "Override the system root", "PATH"),

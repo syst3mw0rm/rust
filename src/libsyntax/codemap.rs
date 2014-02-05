@@ -434,7 +434,8 @@ impl CodeMap {
 
     // Converts an absolute BytePos to a CharPos relative to the file it is
     // located in
-    fn bytepos_to_local_charpos(&self, bpos: BytePos) -> CharPos {
+    // TODO[nrc] move to pub impl
+    pub fn bytepos_to_local_charpos(&self, bpos: BytePos) -> CharPos {
         debug!("codemap: converting {:?} to char pos", bpos);
         let idx = self.lookup_filemap_idx(bpos);
         let files = self.files.borrow();
