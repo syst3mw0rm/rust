@@ -295,7 +295,7 @@ impl Map {
         self.with_path(id, |path| path_to_str(path))
     }
 
-    fn path_to_str_with_ident(&self, id: NodeId, i: Ident) -> ~str {
+    pub fn path_to_str_with_ident(&self, id: NodeId, i: Ident) -> ~str {
         self.with_path(id, |path| {
             path_to_str(path.chain(Some(PathName(i.name)).move_iter()))
         })

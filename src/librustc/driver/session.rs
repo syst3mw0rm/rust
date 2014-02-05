@@ -124,6 +124,7 @@ pub struct Options {
     optimize: OptLevel,
     debuginfo: bool,
     lint_opts: ~[(lint::Lint, lint::level)],
+    save_analysis: bool,
     output_types: ~[back::link::OutputType],
     // This was mutable for rustpkg, which updates search paths based on the
     // parsed code. It remains mutable in case its replacements wants to use
@@ -316,6 +317,7 @@ pub fn basic_options() -> @Options {
         optimize: No,
         debuginfo: false,
         lint_opts: ~[],
+        save_analysis: false,
         output_types: ~[],
         addl_lib_search_paths: @RefCell::new(HashSet::new()),
         maybe_sysroot: None,

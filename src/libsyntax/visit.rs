@@ -182,7 +182,7 @@ pub fn walk_local<E: Clone, V: Visitor<E>>(visitor: &mut V, local: &Local, env: 
     }
 }
 
-fn walk_explicit_self<E: Clone, V: Visitor<E>>(visitor: &mut V,
+pub fn walk_explicit_self<E: Clone, V: Visitor<E>>(visitor: &mut V,
                                                explicit_self: &ExplicitSelf,
                                                env: E) {
     match explicit_self.node {
