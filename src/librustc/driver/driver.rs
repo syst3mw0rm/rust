@@ -276,7 +276,7 @@ pub fn phase_3_run_analysis_passes(sess: Session,
         last_private_map: last_private_map
     } =
         time(time_passes, "resolution", (), |_|
-             middle::resolve::resolve_crate(sess, lang_items, krate));
+             middle::resolve::resolve_crate(sess, lang_items, &ast_map, krate));
 
     let named_region_map = time(time_passes, "lifetime resolution", (),
                                 |_| middle::resolve_lifetime::krate(sess, krate));

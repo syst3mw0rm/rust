@@ -143,6 +143,7 @@ pub enum TraitStore {
     RegionTraitStore(Region),   // &Trait
 }
 
+#[deriving(Clone)]
 pub struct field_ty {
     name: Name,
     id: DefId,
@@ -4280,7 +4281,22 @@ pub fn lookup_struct_fields(cx: ctxt, did: ast::DefId) -> ~[field_ty] {
            Some(ast_map::NodeItem(i)) => {
              match i.node {
                 ast::ItemStruct(struct_def, _) => {
-                   struct_field_tys(struct_def.fields)
+                    let direct_fields = struct_field_tys(struct_def.fields);
+                    match struct_def.super_struct {
+                        Some(t) => match t.node {
+                            TyPath(_, _, path_id) => {
+                                let def_map = cx.def_map.borrow();
+                                match def_map.get().find(&path_id) {
+                                    Some(&DefStruct(def_id)) => {
+                                        direct_fields + lookup_struct_fields(cx, def_id)
+                                    },
+                                    _ => cx.sess.bug("super-struct ID not in def_map"),
+                                }
+                            }
+                            _ => cx.sess.bug("super-struct ID not mapped to a TyPath"),
+                        },
+                        None => direct_fields,
+                    }
                 }
                 _ => cx.sess.bug("struct ID bound to non-struct")
              }

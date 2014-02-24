@@ -52,6 +52,7 @@ static KNOWN_FEATURES: &'static [(&'static str, Status)] = &[
     ("simd", Active),
     ("default_type_params", Active),
     ("quote", Active),
+    ("struct_inherit", Active),
 
     // These are used to test this portion of the compiler, they don't actually
     // mean anything
@@ -187,10 +188,16 @@ impl Visitor<()> for Context {
                 }
             }
 
-            ast::ItemStruct(..) => {
+            ast::ItemStruct(struct_definition, _) => {
                 if attr::contains_name(i.attrs, "simd") {
                     self.gate_feature("simd", i.span,
                                       "SIMD types are experimental and possibly buggy");
+                }
+                match struct_definition.super_struct{
+                    Some(ref path) => self.gate_feature("struct_inherit", path.span,
+                                                    "struct inheritance is experimental \
+                                                     and possibly buggy"),
+                    None => {}
                 }
             }
 

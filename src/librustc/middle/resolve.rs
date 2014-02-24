@@ -19,6 +19,7 @@ use middle::pat_util::pat_bindings;
 
 use syntax::ast::*;
 use syntax::ast;
+use syntax::ast_map;
 use syntax::ast_util::{def_id_of_def, local_def, mtwt_resolve};
 use syntax::ast_util::{path_to_ident, walk_pat, trait_method_to_ty_method};
 use syntax::parse::token::special_idents;
@@ -150,7 +151,7 @@ enum NameDefinition {
     ImportNameDefinition(Def, LastPrivate) //< The name identifies an import.
 }
 
-impl Visitor<()> for Resolver {
+impl<'a> Visitor<()> for Resolver<'a> {
     fn visit_item(&mut self, item: &Item, _: ()) {
         self.resolve_item(item);
     }
@@ -784,9 +785,10 @@ fn namespace_error_to_str(ns: NamespaceError) -> &'static str {
     }
 }
 
-fn Resolver(session: Session,
+fn Resolver<'a>(session: Session,
             lang_items: @LanguageItems,
-            crate_span: Span) -> Resolver {
+            ast_map: &'a ast_map::Map,
+            crate_span: Span) -> Resolver<'a> {
     let graph_root = @NameBindings();
 
     graph_root.define_module(NoParentLink,
@@ -798,7 +800,7 @@ fn Resolver(session: Session,
 
     let current_module = graph_root.get_module();
 
-    let this = Resolver {
+    let this = Resolver::<'a> {
         session: @session,
         lang_items: lang_items,
 
@@ -808,7 +810,7 @@ fn Resolver(session: Session,
         graph_root: graph_root,
 
         method_map: @RefCell::new(HashMap::new()),
-        structs: HashSet::new(),
+        structs: HashMap::new(),
 
         unresolved_imports: 0,
 
@@ -826,6 +828,7 @@ fn Resolver(session: Session,
 
         namespaces: ~[ TypeNS, ValueNS ],
 
+        ast_map: ast_map,
         def_map: @RefCell::new(HashMap::new()),
         export_map2: @RefCell::new(HashMap::new()),
         trait_map: HashMap::new(),
@@ -840,14 +843,14 @@ fn Resolver(session: Session,
 }
 
 /// The main resolver class.
-struct Resolver {
+struct Resolver<'a> {
     session: @Session,
     lang_items: @LanguageItems,
 
     graph_root: @NameBindings,
 
     method_map: @RefCell<HashMap<Name, HashSet<DefId>>>,
-    structs: HashSet<DefId>,
+    structs: HashMap<DefId, HashMap<ast::Ident, StructField>>,
 
     // The number of imports that are currently unresolved.
     unresolved_imports: uint,
@@ -879,6 +882,8 @@ struct Resolver {
     // The four namespaces.
     namespaces: ~[Namespace],
 
+    ast_map: &'a ast_map::Map,
+
     def_map: DefMap,
     export_map2: ExportMap2,
     trait_map: TraitMap,
@@ -893,11 +898,11 @@ struct Resolver {
     used_imports: HashSet<(NodeId, Namespace)>,
 }
 
-struct BuildReducedGraphVisitor<'a> {
-    resolver: &'a mut Resolver,
+struct BuildReducedGraphVisitor<'a, 'b> {
+    resolver: &'a mut Resolver<'b>,
 }
 
-impl<'a> Visitor<ReducedGraphParent> for BuildReducedGraphVisitor<'a> {
+impl<'a, 'b> Visitor<ReducedGraphParent> for BuildReducedGraphVisitor<'a, 'b> {
 
     fn visit_item(&mut self, item: &Item, context: ReducedGraphParent) {
         let p = self.resolver.build_reduced_graph_for_item(item, context);
@@ -925,16 +930,16 @@ impl<'a> Visitor<ReducedGraphParent> for BuildReducedGraphVisitor<'a> {
 
 }
 
-struct UnusedImportCheckVisitor<'a> { resolver: &'a mut Resolver }
+struct UnusedImportCheckVisitor<'a, 'b> { resolver: &'a mut Resolver<'b> }
 
-impl<'a> Visitor<()> for UnusedImportCheckVisitor<'a> {
+impl<'a, 'b> Visitor<()> for UnusedImportCheckVisitor<'a, 'b> {
     fn visit_view_item(&mut self, vi: &ViewItem, _: ()) {
         self.resolver.check_for_item_unused_imports(vi);
         visit::walk_view_item(self, vi, ());
     }
 }
 
-impl Resolver {
+impl<'a> Resolver<'a> {
     /// The main name resolution procedure.
     fn resolve(&mut self, krate: &ast::Crate) {
         self.build_reduced_graph(krate);
@@ -1236,8 +1241,32 @@ impl Resolver {
                     None
                 });
 
+                let mut ident_map: HashMap<ast::Ident, StructField> = HashMap::new();
+                for field in struct_def.fields.iter() {
+                    match field.node.kind {
+                        NamedField(ident, _) => {
+                            let dup = match ident_map.find(&ident) {
+                                Some(& ref prev_field) => {
+                                    let ident_str = token::get_ident(ident);
+                                    self.resolve_error(field.span,
+                                        format!("field `{}` is already declared", ident_str));
+                                    self.session.span_note(prev_field.span,
+                                        "previously declared here");
+                                    true
+                                },
+                                None => false,
+                            };
+                            // This whole dup thing is just to satisfy the borrow checker :-(
+                            if !dup {
+                                ident_map.insert(ident, field.clone());
+                            }
+                        }
+                        _ => ()
+                    }
+                }
+
                 // Record the def ID of this struct.
-                self.structs.insert(local_def(item.id));
+                self.structs.insert(local_def(item.id), ident_map);
 
                 new_parent
             }
@@ -1434,7 +1463,7 @@ impl Resolver {
                 child.define_type(DefVariant(item_id,
                                              local_def(variant.node.id), true),
                                   variant.span, is_public);
-                self.structs.insert(local_def(variant.node.id));
+                self.structs.insert(local_def(variant.node.id), HashMap::new());
             }
         }
     }
@@ -1669,7 +1698,7 @@ impl Resolver {
             let is_public = vis != ast::Private;
             if is_struct {
                 child_name_bindings.define_type(def, DUMMY_SP, is_public);
-                self.structs.insert(variant_id);
+                self.structs.insert(variant_id, HashMap::new());
             } else {
                 child_name_bindings.define_value(def, DUMMY_SP, is_public);
             }
@@ -1743,7 +1772,7 @@ impl Resolver {
             if csearch::get_struct_fields(self.session.cstore, def_id).len() == 0 {
                 child_name_bindings.define_value(def, DUMMY_SP, is_public);
             }
-            self.structs.insert(def_id);
+            self.structs.insert(def_id, HashMap::new());
           }
           DefMethod(..) => {
               debug!("(building reduced graph for external crate) \
@@ -3764,6 +3793,7 @@ impl Resolver {
             ItemStruct(ref struct_def, ref generics) => {
                 self.resolve_struct(item.id,
                                     generics,
+                                    struct_def.super_struct,
                                     struct_def.fields);
             }
 
@@ -4012,30 +4042,80 @@ impl Resolver {
         }
     }
 
-    fn resolve_struct(&mut self,
-                          id: NodeId,
-                          generics: &Generics,
-                          fields: &[StructField]) {
-        let mut ident_map: HashMap<ast::Ident, &StructField> = HashMap::new();
+    fn def_for_path(&self, path_id: &NodeId) -> Option<DefId> {
+        let def_map = self.def_map.borrow();
+        match def_map.get().find(path_id) {
+            Some(&def) => Some(def_id_of_def(def)),
+            None => None,
+        }
+    }
+
+    // Check fields are uniquely named wrt parents.
+    fn check_for_field_shadowing(&mut self,
+                                 fields: &[StructField],
+                                 parent_id: DefId) {
+        let field_map = self.structs.get(&parent_id).clone();
+
         for field in fields.iter() {
             match field.node.kind {
                 NamedField(ident, _) => {
-                    match ident_map.find(&ident) {
-                        Some(&prev_field) => {
+                    match field_map.find(&ident) {
+                        Some(prev_field) => {
                             let ident_str = token::get_ident(ident);
                             self.resolve_error(field.span,
-                                format!("field `{}` is already declared", ident_str));
+                                format!("field `{}` hides field declared in super-struct",
+                                        ident_str));
                             self.session.span_note(prev_field.span,
                                 "previously declared here");
                         },
-                        None => {
-                            ident_map.insert(ident, field);
-                        }
+                        None => {},
                     }
                 }
                 _ => ()
             }
         }
+
+        // Recurse to check transitive parents.
+        match self.ast_map.find(parent_id.node) {
+            Some(ast_map::NodeItem(i)) => match i.node {
+                ast::ItemStruct(struct_def, _) => {
+                    match struct_def.super_struct {
+                        Some(t) => match t.node {
+                            TyPath(_, _, path_id) => {
+                                let def_id = match self.def_for_path(&path_id) {
+                                    Some(def_id) => Some(def_id),
+                                    None => {
+                                        // We haven't resolved our parent struct yet,
+                                        // so do it now (ahead of time).
+                                        self.resolve_item(i);
+                                        self.def_for_path(&path_id)
+                                    }
+                                };
+                                match def_id {
+                                    Some(def_id) => self.check_for_field_shadowing(fields, def_id),
+                                    None => {},
+                                }
+                            }
+                            _ => {},
+                        },
+                        None => {},
+                    }
+                },
+                _ => {},
+            },
+            _ => {},
+        }
+    }
+
+    fn resolve_struct(&mut self,
+                      id: NodeId,
+                      generics: &Generics,
+                      super_struct: Option<P<Ty>>,
+                      fields: &[StructField]) {
+        // Note, check_for_field_shadowing might cause us to check a struct ahead
+        // of time and thus resolve_struct might already have been called for the
+        // current struct. That doesn't seem to be a problem, if it becomes one,
+        // then we'll need an early return here.
 
         // If applicable, create a rib for the type parameters.
         self.with_type_parameter_rib(HasTypeParameters(generics,
@@ -4045,6 +4125,42 @@ impl Resolver {
                                      |this| {
             // Resolve the type parameters.
             this.resolve_type_parameters(&generics.ty_params);
+
+            // Resolve the super struct.
+            // FIXME(#12511) Check for cycles in the inheritance hierarchy.
+            match super_struct {
+                Some(t) => match t.node {
+                    TyPath(ref path, None, path_id) => {
+                        match this.resolve_path(id, path, TypeNS, true) {
+                            Some((DefTy(def_id),lp)) if this.structs.contains_key(&def_id) => {
+                                let def = DefStruct(def_id);
+                                debug!("(resolving struct) resolved `{}` to type {:?}",
+                                       token::get_ident(path.segments
+                                                            .last().unwrap()
+                                                            .identifier),
+                                       def);
+                                debug!("(resolving struct) writing resolution for `{}` (id {})",
+                                       this.path_idents_to_str(path),
+                                       path_id);
+                                this.record_def(path_id, (def, lp));
+
+                                this.check_for_field_shadowing(fields, def_id);
+                            }
+                            Some((DefStruct(_),_)) => {
+                                this.session.span_err(t.span,
+                                                      "super-struct is defined \
+                                                       in a different crate")
+                            },
+                            Some(_) => this.session.span_err(t.span,
+                                                             "super-struct is not a struct type"),
+                            None => this.session.span_err(t.span,
+                                                          "super-struct could not be resolved"),
+                        }
+                    },
+                    _ => this.session.span_bug(t.span, "path not mapped to a TyPath")
+                },
+                None => {}
+            }
 
             // Resolve fields.
             for field in fields.iter() {
@@ -4614,16 +4730,16 @@ impl Resolver {
                 PatStruct(ref path, _, _) => {
                     match self.resolve_path(pat_id, path, TypeNS, false) {
                         Some((DefTy(class_id), lp))
-                                if self.structs.contains(&class_id) => {
+                                if self.structs.contains_key(&class_id) => {
                             let class_def = DefStruct(class_id);
                             self.record_def(pattern.id, (class_def, lp));
                         }
                         Some(definition @ (DefStruct(class_id), _)) => {
-                            assert!(self.structs.contains(&class_id));
+                            assert!(self.structs.contains_key(&class_id));
                             self.record_def(pattern.id, definition);
                         }
                         Some(definition @ (DefVariant(_, variant_id, _), _))
-                                if self.structs.contains(&variant_id) => {
+                                if self.structs.contains_key(&variant_id) => {
                             self.record_def(pattern.id, definition);
                         }
                         result => {
@@ -5136,7 +5252,7 @@ impl Resolver {
                         match self.with_no_errors(|this|
                             this.resolve_path(expr.id, path, TypeNS, false)) {
                             Some((DefTy(struct_id), _))
-                              if self.structs.contains(&struct_id) => {
+                              if self.structs.contains_key(&struct_id) => {
                                 self.resolve_error(expr.span,
                                         format!("`{}` is a structure name, but \
                                                  this expression \
@@ -5183,12 +5299,12 @@ impl Resolver {
                 // Resolve the path to the structure it goes to.
                 match self.resolve_path(expr.id, path, TypeNS, false) {
                     Some((DefTy(class_id), lp)) | Some((DefStruct(class_id), lp))
-                            if self.structs.contains(&class_id) => {
+                            if self.structs.contains_key(&class_id) => {
                         let class_def = DefStruct(class_id);
                         self.record_def(expr.id, (class_def, lp));
                     }
                     Some(definition @ (DefVariant(_, class_id, _), _))
-                            if self.structs.contains(&class_id) => {
+                            if self.structs.contains_key(&class_id) => {
                         self.record_def(expr.id, definition);
                     }
                     result => {
@@ -5563,9 +5679,10 @@ pub struct CrateMap {
 /// Entry point to crate resolution.
 pub fn resolve_crate(session: Session,
                      lang_items: @LanguageItems,
+                     ast_map: &ast_map::Map,
                      krate: &Crate)
                   -> CrateMap {
-    let mut resolver = Resolver(session, lang_items, krate.span);
+    let mut resolver = Resolver(session, lang_items, ast_map, krate.span);
     resolver.resolve(krate);
     let Resolver { def_map, export_map2, trait_map, last_private,
                    external_exports, .. } = resolver;

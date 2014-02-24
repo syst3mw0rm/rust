@@ -3961,6 +3961,21 @@ impl Parser {
         let class_name = self.parse_ident();
         let generics = self.parse_generics();
 
+        let super_struct = if self.eat(&token::COLON) {
+            let ty = self.parse_ty(false);
+            match ty.node {
+                TyPath(_, None, _) => {
+                    Some(ty)
+                }
+                _ => {
+                    self.span_err(ty.span, "not a struct");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let mut fields: ~[StructField];
         let is_tuple_like;
 
@@ -4011,7 +4026,8 @@ impl Parser {
         (class_name,
          ItemStruct(@ast::StructDef {
              fields: fields,
-             ctor_id: if is_tuple_like { Some(new_id) } else { None }
+             ctor_id: if is_tuple_like { Some(new_id) } else { None },
+             super_struct: super_struct
          }, generics),
          None)
     }
@@ -4418,7 +4434,8 @@ impl Parser {
 
         return @ast::StructDef {
             fields: fields,
-            ctor_id: None
+            ctor_id: None,
+            super_struct: None
         };
     }
 

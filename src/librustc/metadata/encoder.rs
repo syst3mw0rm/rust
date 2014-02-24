@@ -1007,12 +1007,43 @@ fn encode_info_for_item(ecx: &EncodeContext,
                                  generics);
       }
       ItemStruct(struct_def, _) => {
+        // Create a list of all structs which compose this struct. That is, the
+        // reflexive, transitive closure over struct_def's super-struct.
+        let mut cur_struct = struct_def;
+        let mut structs: ~[@StructDef] = ~[];
+        loop {
+            structs.push(cur_struct);
+            match cur_struct.super_struct {
+                Some(t) => match t.node {
+                    ast::TyPath(_, _, path_id) => {
+                        let def_map = tcx.def_map.borrow();
+                        match def_map.get().find(&path_id) {
+                            Some(&DefStruct(def_id)) => {
+                                cur_struct = match tcx.map.find(def_id.node) {
+                                    Some(ast_map::NodeItem(i)) => {
+                                        match i.node {
+                                            ast::ItemStruct(struct_def, _) => struct_def,
+                                            _ => ecx.diag.handler().bug("Expected ItemStruct"),
+                                        }
+                                    },
+                                    _ => ecx.diag.handler().bug("Expected NodeItem"),
+                                };
+                            },
+                            _ => ecx.diag.handler().bug("Expected DefStruct"),
+                        }
+                    }
+                    _ => ecx.diag.handler().bug("Expected TyPath"),
+                },
+                None => break,
+            }
+        }
+
         /* First, encode the fields
            These come first because we need to write them to make
            the index, and the index needs to be in the item for the
            class itself */
-        let idx = encode_info_for_struct(ecx, ebml_w,
-                                         struct_def.fields, index);
+        let idx = structs.iter().fold(~[], |a: ~[entry<i64>], &s|
+            a + encode_info_for_struct(ecx, ebml_w, s.fields, index));
 
         /* Index the class*/
         add_to_index(item, ebml_w, index);
@@ -1032,7 +1063,10 @@ fn encode_info_for_item(ecx: &EncodeContext,
         /* Encode def_ids for each field and method
          for methods, write all the stuff get_trait_method
         needs to know*/
-        encode_struct_fields(ebml_w, struct_def);
+        structs.iter().advance(|&s| {
+            encode_struct_fields(ebml_w, s);
+            true
+        });
 
         (ecx.encode_inlined_item)(ecx, ebml_w, IIItemRef(item));
 

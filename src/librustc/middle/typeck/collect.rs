@@ -644,13 +644,22 @@ pub fn convert(ccx: &CrateCtxt, it: &ast::Item) {
         ast::ItemStruct(struct_def, ref generics) => {
             ensure_no_ty_param_bounds(ccx, it.span, generics, "structure");
 
-            // Write the class type
+            // Write the class type.
             let tpt = ty_of_item(ccx, it);
             write_ty_to_tcx(tcx, it.id, tpt.ty);
 
             {
                 let mut tcache = tcx.tcache.borrow_mut();
                 tcache.get().insert(local_def(it.id), tpt.clone());
+            }
+
+            // Write the super-struct type, if it exists.
+            match struct_def.super_struct {
+                Some(ty) => {
+                    let supserty = ccx.to_ty(&ExplicitRscope, ty);
+                    write_ty_to_tcx(tcx, it.id, supserty);
+                },
+                _ => {},
             }
 
             convert_struct(ccx, struct_def, tpt, it.id);

@@ -758,6 +758,13 @@ pub fn print_struct(s: &mut State,
                     span: codemap::Span) -> io::IoResult<()> {
     try!(print_ident(s, ident));
     try!(print_generics(s, generics));
+    match struct_def.super_struct {
+        Some(t) => {
+            try!(word_space(s, ":"));
+            try!(print_type(s, t));
+        },
+        None => {},
+    }
     if ast_util::struct_def_is_tuple_like(struct_def) {
         if !struct_def.fields.is_empty() {
             try!(popen(s));

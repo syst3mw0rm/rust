@@ -1125,7 +1125,8 @@ pub struct StructDef {
     fields: ~[StructField], /* fields, not including ctor */
     /* ID of the constructor. This is only used for tuple- or enum-like
      * structs. */
-    ctor_id: Option<NodeId>
+    ctor_id: Option<NodeId>,
+    super_struct: Option<P<Ty>>, // super struct, if specified
 }
 
 /*
