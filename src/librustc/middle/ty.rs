@@ -148,6 +148,7 @@ pub struct field_ty {
     name: Name,
     id: DefId,
     vis: ast::Visibility,
+    origin: ast::DefId,  // The DefId of the struct in which the field is declared.
 }
 
 // Contains information needed to resolve types and (in the future) look up
@@ -4281,7 +4282,7 @@ pub fn lookup_struct_fields(cx: ctxt, did: ast::DefId) -> ~[field_ty] {
            Some(ast_map::NodeItem(i)) => {
              match i.node {
                 ast::ItemStruct(struct_def, _) => {
-                    let direct_fields = struct_field_tys(struct_def.fields);
+                    let direct_fields = struct_field_tys(struct_def.fields, did);
                     match struct_def.super_struct {
                         Some(t) => match t.node {
                             TyPath(_, _, path_id) => {
@@ -4304,7 +4305,7 @@ pub fn lookup_struct_fields(cx: ctxt, did: ast::DefId) -> ~[field_ty] {
            Some(ast_map::NodeVariant(ref variant)) => {
               match (*variant).node.kind {
                 ast::StructVariantKind(struct_def) => {
-                  struct_field_tys(struct_def.fields)
+                  struct_field_tys(struct_def.fields, ast_util::local_def(variant.node.id))
                 }
                 _ => {
                   cx.sess.bug("struct ID bound to enum variant that isn't \
@@ -4336,7 +4337,7 @@ pub fn lookup_struct_field(cx: ctxt,
     }
 }
 
-fn struct_field_tys(fields: &[StructField]) -> ~[field_ty] {
+fn struct_field_tys(fields: &[StructField], origin: DefId) -> ~[field_ty] {
     fields.map(|field| {
         match field.node.kind {
             NamedField(ident, visibility) => {
@@ -4344,6 +4345,7 @@ fn struct_field_tys(fields: &[StructField]) -> ~[field_ty] {
                     name: ident.name,
                     id: ast_util::local_def(field.node.id),
                     vis: visibility,
+                    origin: origin,
                 }
             }
             UnnamedField => {
@@ -4351,6 +4353,7 @@ fn struct_field_tys(fields: &[StructField]) -> ~[field_ty] {
                     name: syntax::parse::token::special_idents::unnamed_field.name,
                     id: ast_util::local_def(field.node.id),
                     vis: ast::Public,
+                    origin: origin,
                 }
             }
         }

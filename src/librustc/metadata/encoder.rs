@@ -300,19 +300,28 @@ fn encode_parent_item(ebml_w: &mut writer::Encoder, id: DefId) {
 }
 
 fn encode_struct_fields(ebml_w: &mut writer::Encoder,
-                        def: @StructDef) {
+                        def: @StructDef,
+                        origin: DefId) {
     for f in def.fields.iter() {
         match f.node.kind {
             NamedField(ident, vis) => {
-               ebml_w.start_tag(tag_item_field);
-               encode_struct_field_family(ebml_w, vis);
-               encode_name(ebml_w, ident.name);
-               encode_def_id(ebml_w, local_def(f.node.id));
-               ebml_w.end_tag();
+                ebml_w.start_tag(tag_item_field);
+                encode_struct_field_family(ebml_w, vis);
+                encode_name(ebml_w, ident.name);
+                encode_def_id(ebml_w, local_def(f.node.id));
+                ebml_w.start_tag(tag_item_field_origin);
+                let s = def_to_str(origin);
+                ebml_w.writer.write(s.as_bytes());
+                ebml_w.end_tag();
+                ebml_w.end_tag();
             }
             UnnamedField => {
                 ebml_w.start_tag(tag_item_unnamed_field);
                 encode_def_id(ebml_w, local_def(f.node.id));
+                ebml_w.start_tag(tag_item_field_origin);
+                let s = def_to_str(origin);
+                ebml_w.writer.write(s.as_bytes());
+                ebml_w.end_tag();
                 ebml_w.end_tag();
             }
         }
@@ -358,7 +367,7 @@ fn encode_enum_variant_info(ecx: &EncodeContext,
             ast::TupleVariantKind(_) => {},
             ast::StructVariantKind(def) => {
                 let idx = encode_info_for_struct(ecx, ebml_w, def.fields, index);
-                encode_struct_fields(ebml_w, def);
+                encode_struct_fields(ebml_w, def, def_id);
                 let bkts = create_index(idx);
                 encode_index(ebml_w, bkts, write_i64);
             }
@@ -1064,7 +1073,7 @@ fn encode_info_for_item(ecx: &EncodeContext,
          for methods, write all the stuff get_trait_method
         needs to know*/
         structs.iter().advance(|&s| {
-            encode_struct_fields(ebml_w, s);
+            encode_struct_fields(ebml_w, s, def_id);
             true
         });
 

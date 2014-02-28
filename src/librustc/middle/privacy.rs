@@ -497,7 +497,7 @@ impl<'a> PrivacyVisitor<'a> {
         // members, so that's why we test the parent, and not the did itself.
         let mut cur = self.curitem;
         loop {
-            debug!("privacy - questioning {}", self.nodestr(cur));
+            debug!("privacy - questioning {}, {:?}", self.nodestr(cur), cur);
             match cur {
                 // If the relevant parent is in our history, then we're allowed
                 // to look inside any of our ancestor's immediate private items,
@@ -562,12 +562,11 @@ impl<'a> PrivacyVisitor<'a> {
         }
     }
 
-    // Checks that a field is in scope.
-    // FIXME #6993: change type (and name) from Ident to Name
-    fn check_field(&mut self, span: Span, id: ast::DefId, ident: ast::Ident,
-                   enum_id: Option<ast::DefId>) {
-        let fields = ty::lookup_struct_fields(self.tcx, id);
-        let struct_vis = if is_local(id) {
+    fn lookup_struct_vis(&mut self,
+                         id: ast::DefId,
+                         span: Span,
+                         enum_id: Option<ast::DefId>) -> ast::Visibility {
+        if is_local(id) {
             match self.tcx.map.get(id.node) {
                 ast_map::NodeItem(ref it) => it.vis,
                 ast_map::NodeVariant(ref v) => {
@@ -603,12 +602,27 @@ impl<'a> PrivacyVisitor<'a> {
                 }
                 None => csearch::get_item_visibility(cstore, id)
             }
-        };
+        }
+    }
 
+    // Checks that a field is in scope.
+    // FIXME #6993: change type (and name) from Ident to Name
+    fn check_field(&mut self,
+                   span: Span,
+                   id: ast::DefId,
+                   ident: ast::Ident,
+                   enum_id: Option<ast::DefId>) {
+        debug!("privacy - check field {} in struct {}", ident.name, id);
+        let fields = ty::lookup_struct_fields(self.tcx, id);
         for field in fields.iter() {
             if field.name != ident.name { continue; }
             // public structs have public fields by default, and private structs
             // have private fields by default.
+            assert!(enum_id == None || field.origin == id,
+                    "struct inheritance not supported with enum structs");
+            let struct_vis = self.lookup_struct_vis(field.origin, span, enum_id);
+            debug!("privacy - found {} - field: {:?}, struct: {:?}",
+                   field.name, field.vis, struct_vis);
             if struct_vis == ast::Public && field.vis != ast::Private { break }
             if struct_vis != ast::Public && field.vis == ast::Public { break }
             if !is_local(field.id) ||

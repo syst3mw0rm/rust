@@ -34,6 +34,10 @@
 // debugger:print padding_at_end
 // check:$6 = {x = -10014, y = 10015}
 
+// debugger:print inheriting
+// check:$7 = { x: -10016, y: -10017.5, z: 10018, a: -10019, b: -10020 }
+
+
 #[allow(unused_variable)];
 
 struct NoPadding16 {
@@ -70,6 +74,11 @@ struct PaddingAtEnd {
     y: u16
 }
 
+struct Inheriting : NoPadding32 {
+    a: u16,
+    b: i16
+}
+
 fn main() {
     let no_padding16 = NoPadding16 { x: 10000, y: -10001 };
     let no_padding32 = NoPadding32 { x: -10002, y: -10003.5, z: 10004 };
@@ -78,6 +87,8 @@ fn main() {
 
     let internal_padding = InternalPadding { x: 10012, y: -10013 };
     let padding_at_end = PaddingAtEnd { x: -10014, y: 10015 };
+
+    let inheriting = Inheriting { x: -10016, y: -10017.5, z: 10018, a: -10019, b: -10020 };
 
     zzz();
 }
