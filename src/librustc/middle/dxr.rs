@@ -1373,11 +1373,11 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 }
                 visit::walk_expr_opt(self, base, e)
             },
-            ast::ExprMethodCall(_, _, _, ref args) => {
+            ast::ExprMethodCall(_, _, ref args) => {
                 let method_map = self.analysis.maps.method_map.borrow();
-                let method = method_map.get().get(&ex.id);
-                match *method {
-                    typeck::method_static(def_id) => {
+                let method_callee = method_map.get().get(&ex.id);
+                match method_callee.origin {
+                    typeck::MethodStatic(def_id) => {
                         // method invoked on a struct object (not a static method)
                         let sub_span = self.span.sub_span_for_fn_name(ex.span);
                         let declid = match ty::trait_method_of_method(self.analysis.ty_cx, def_id) {
@@ -1386,13 +1386,13 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                         };
                         meth_call_str(self.recorder, self.span, ex.span, sub_span, def_id, declid, e.cur_scope);
                     }
-                    typeck::method_param(mp) => {
+                    typeck::MethodParam(mp) => {
                         // method invoked on a type parameter
                         let method = ty::trait_method(self.analysis.ty_cx, mp.trait_id, mp.method_num);
                         let sub_span = self.span.sub_span_for_fn_name(ex.span);
                         meth_call_str(self.recorder, self.span, ex.span, sub_span, DefId{node:0,krate:0}, Some(method.def_id), e.cur_scope);
                     },
-                    typeck::method_object(mo) => {
+                    typeck::MethodObject(mo) => {
                         // method invoked on a trait instance
                         let method = ty::trait_method(self.analysis.ty_cx, mo.trait_id, mo.method_num);
                         let sub_span = self.span.sub_span_for_fn_name(ex.span);
