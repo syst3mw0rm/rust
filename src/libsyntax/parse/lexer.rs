@@ -264,6 +264,7 @@ pub fn bump(rdr: &StringReader) {
         }
 
         if byte_offset_diff > 1 {
+            debug!("recording mbc, {:?}", rdr.curr.get().unwrap());
             rdr.filemap.record_multibyte_char(rdr.last_pos.get(), byte_offset_diff);
         }
     } else {

@@ -408,6 +408,11 @@ impl<'a> TraitDef<'a> {
                                            ast::CookedStr)));
         let opt_trait_ref = Some(trait_ref);
         let ident = ast_util::impl_pretty_name(&opt_trait_ref, self_type);
+        match self.span.expn_info {
+            None => fail!("derived trait should have expn_info set"),
+            Some(_) => {},
+        }
+        assert!(self.span.expn_info.is_some(), "Should have expansion info")
         cx.item(
             self.span,
             ident,
@@ -613,6 +618,8 @@ impl<'a> MethodDef<'a> {
             Vec::new()
         };
 
+        assert!(!trait_.span.expn_info.is_none(),
+                "We should indicate that this is generated code");
         // Create the method.
         @ast::Method {
             ident: method_ident,

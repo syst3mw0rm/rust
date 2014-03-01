@@ -18,6 +18,7 @@ use middle::ty;
 use middle::typeck;
 
 //use std::hashmap::HashMap;
+use std::cast;
 use std::io;
 use std::io::File;
 use std::io::fs;
@@ -34,7 +35,8 @@ use syntax::codemap::*;
 use syntax::diagnostic;
 use syntax::parse::lexer;
 use syntax::parse::lexer::{Reader,StringReader};
-use syntax::parse::token::{get_ident,is_keyword,keywords,is_ident,Token,EOF,EQ,COLON,LT,GT,SHL,SHR,BINOP,LPAREN};
+use syntax::parse::token;
+use syntax::parse::token::{get_ident,is_keyword,keywords,is_ident,Token};
 use syntax::visit;
 use syntax::visit::Visitor;
 use syntax::print::pprust::{path_to_str,ty_to_str};
@@ -69,6 +71,7 @@ impl Recorder {
 
 struct SpanUtils {
     code_map: @CodeMap,
+    err_count: int,
 }
 
 impl SpanUtils {
@@ -76,9 +79,10 @@ impl SpanUtils {
     // sub_span starts at span.lo, so we need to adjust the positions etc.
     // if sub_span is None, we don't need to adjust.
     fn extent_str(&self, span: Span, sub_span: Option<Span>) -> ~str {
+        assert!(!generated_code(span), "generated code; we should not be processing this");
+
         let base_loc = self.code_map.lookup_char_pos(span.lo);
-        // TODO bytepos_to_charpos is known to be buggy - I wonder if this is screwing us?
-        let base_pos: CharPos = self.code_map.bytepos_to_charpos(span.lo - base_loc.file.start_pos);
+        let base_pos: CharPos = self.code_map.bytepos_to_file_charpos(span.lo);
 
         let mut lo_loc = base_loc;
         let mut hi_loc = base_loc;
@@ -93,20 +97,18 @@ impl SpanUtils {
                 lo_loc.col = base_loc.col + sub_lo.col;
                 hi_loc.line = base_loc.line + sub_hi.line - 1;
                 hi_loc.col = base_loc.col + sub_hi.col;
-                // TODO here too
-                lo_pos = base_pos + self.code_map.bytepos_to_charpos(ss.lo - sub_lo.file.start_pos);
-                hi_pos = base_pos + self.code_map.bytepos_to_charpos(ss.hi - sub_hi.file.start_pos);
+                lo_pos = base_pos + self.code_map.bytepos_to_file_charpos(ss.lo);
+                hi_pos = base_pos + self.code_map.bytepos_to_file_charpos(ss.hi);
             },
             None => {
                 hi_loc = self.code_map.lookup_char_pos(span.hi);
                 lo_pos = base_pos;
-                // TODO and here
-                let cph: CharPos = self.code_map.bytepos_to_charpos(span.hi - hi_loc.file.start_pos);
-                hi_pos = cph;
+                hi_pos = self.code_map.bytepos_to_file_charpos(span.hi);
             }
         }
 
-        format!("file_name,{},file_line,{},file_col,{},extent_start,{},file_line_end,{},file_col_end,{},extent_end,{}",
+        format!("file_name,{},file_line,{},file_col,{},extent_start,{},\
+                 file_line_end,{},file_col_end,{},extent_end,{}",
                 lo_loc.file.name, lo_loc.line, lo_loc.col.to_uint(), lo_pos.to_uint(),
                 hi_loc.line, hi_loc.col.to_uint(), hi_pos.to_uint())
     }
@@ -151,7 +153,7 @@ impl SpanUtils {
         let toks = self.retokenise_span(span);
         loop {
             let ts = toks.next_token();
-            if ts.tok == EOF {
+            if ts.tok == token::EOF {
                 return result
             }
             if is_ident(&ts.tok) || is_keyword(keywords::Self, &ts.tok) {
@@ -165,7 +167,7 @@ impl SpanUtils {
         let toks = self.retokenise_span(span);
         loop {
             let ts = toks.next_token();
-            if ts.tok == EOF {
+            if ts.tok == token::EOF {
                 return span;
             }
             if is_ident(&ts.tok) || is_keyword(keywords::Self, &ts.tok) {
@@ -174,31 +176,50 @@ impl SpanUtils {
         }
     }
 
-    fn sub_span_for_fn_name(&self, span: Span) -> Option<Span> {
+    // Return the span for the last ident before a `(` or `<` and outside any
+    // any brackets.
+    fn sub_span_for_meth_name(&self, span: Span) -> Option<Span> {
         let toks = self.retokenise_span(span);
         let mut prev = toks.next_token();
+        let mut result = None;
+        let mut bracket_count = 0;
         loop {
-            if prev.tok == EOF {
-                return None;
+            if prev.tok == token::EOF {
+                break;
             }
             let next = toks.next_token();
-            if next.tok == LPAREN ||
-               next.tok == LT {
-                if is_ident(&prev.tok) {
-                    return Some(prev.sp);
-                } else {
-                    return None;
-                }
+
+            if (next.tok == token::LPAREN ||
+                next.tok == token::LT) &&
+               bracket_count == 0 &&
+               is_ident(&prev.tok) {
+                result = Some(prev.sp);
+            }
+
+            if prev.tok == token::LPAREN ||
+               prev.tok == token::LT {
+                bracket_count += 1;
+            }
+            if prev.tok == token::GT ||
+               prev.tok == token::RPAREN {
+                bracket_count -= 1;
+            }
+            if prev.tok == token::BINOP(token::SHL) {
+                bracket_count += 2;
+            }
+            if prev.tok == token::BINOP(token::SHR) {
+                bracket_count -= 2;
             }
             prev = next;
         }
+        return result;
     }
 
     fn sub_span_before_token(&self, span: Span, tok: Token) -> Option<Span> {
         let toks = self.retokenise_span(span);
         let mut prev = toks.next_token();
         loop {
-            if prev.tok == EOF {
+            if prev.tok == token::EOF {
                 return None;
             }
             let next = toks.next_token();
@@ -216,7 +237,7 @@ impl SpanUtils {
         let toks = self.retokenise_span(span);
         let mut prev = toks.next_token();
         let mut next = toks.next_token();
-        while next.tok != EOF {
+        while next.tok != token::EOF {
             if next.tok == tok {
                 sub_spans.push(prev.sp);
             }
@@ -230,12 +251,12 @@ impl SpanUtils {
         let toks = self.retokenise_span(span);
         loop {
             let ts = toks.next_token();
-            if ts.tok == EOF {
+            if ts.tok == token::EOF {
                 return None;
             }
             if is_keyword(keyword, &ts.tok) {
                 let ts = toks.next_token();
-                if ts.tok == EOF {
+                if ts.tok == token::EOF {
                     return None
                 } else {
                     return Some(ts.sp);
@@ -261,28 +282,40 @@ impl SpanUtils {
         let mut bracket_count = 0;
         loop {
             let ts = toks.next_token();
-            if ts.tok == EOF {
+            if ts.tok == token::EOF {
                 if bracket_count != 0 {
                     println!("Mis-counted brackets when breaking path? Parsing '{}'", self.snippet(path.span));
                 }
                 return result
             }
-            if ts.tok == LT {
+            if ts.tok == token::LT {
                 bracket_count += 1;
             }
-            if ts.tok == GT {
+            if ts.tok == token::GT {
                 bracket_count -= 1;
             }
-            if ts.tok == BINOP(SHL) {
+            if ts.tok == token::BINOP(token::SHL) {
                 bracket_count += 2;
             }
-            if ts.tok == BINOP(SHR) {
+            if ts.tok == token::BINOP(token::SHR) {
                 bracket_count -= 2;
             }
             if is_ident(&ts.tok) &&
                bracket_count == 0 {
                 result.push(ts.sp);
             }
+        }
+    }
+
+    fn report_span_err(&self, kind: &str, span: Span) {
+        let loc = self.code_map.lookup_char_pos(span.lo);
+        println!("({}) Could not find sub_span in `{}` in {}, line {}",
+                 kind, self.snippet(span), loc.file.name, loc.line);
+        unsafe {
+            cast::transmute_mut(self).err_count += 1;
+        }
+        if self.err_count > 1000 {
+            fail!("span errors reached 1000, giving up");
         }
     }
 }
@@ -378,16 +411,16 @@ fn tuple_variant_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Sp
 }
 
 // value is the initialising expression of the static if it is not mut, otherwise "".
-fn static_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, name: &str, qualname: &str, value: &str, scope_id: NodeId) {
+fn static_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, name: &str, qualname: &str, value: &str, scope_id: NodeId) {
     if rec.dump_spans {
-        dump_span(rec, su, "static", span, sub_span);
+        dump_span(rec, *su, "static", span, sub_span);
         return;
     }
 
     match sub_span {
         Some(sub_span) => rec.record(format!("variable,{},id,{},name,{},qualname,\"{}\",value,\"{}\",scopeid,{}\n",
                                              su.extent_str(span, Some(sub_span)), id, name, escape(qualname), escape(value), scope_id)),
-        None => println!("(static_str) Could not find sub_span in `{}`", su.snippet(span)),
+        None => su.report_span_err("static_str", span),
     }
 }
 
@@ -411,29 +444,29 @@ fn field_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Span, id: 
                        su.extent_str(span, Some(sub_span)), id, name, escape(qualname), scope_id));
 }
 
-fn fn_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, name: &str, scope_id: NodeId) {
+fn fn_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, name: &str, scope_id: NodeId) {
     if rec.dump_spans {
-        dump_span(rec, su, "funtion", span, sub_span);
+        dump_span(rec, *su, "funtion", span, sub_span);
         return;
     }
 
     match sub_span {
         Some(sub_span) => rec.record(format!("function,{},qualname,\"{}\",id,{},scopeid,{}\n",
                                              su.extent_str(span, Some(sub_span)), escape(name), id, scope_id)),
-        None => println!("(fn_str) Could not find sub_span in `{}`", su.snippet(span)),
+        None => su.report_span_err("fn_str", span),
     }
 }
 
-fn method_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, name: &str, decl_id: Option<DefId>, scope_id: NodeId) {
+fn method_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, name: &str, decl_id: Option<DefId>, scope_id: NodeId) {
     if rec.dump_spans {
-        dump_span(rec, su, "method", span, sub_span);
+        dump_span(rec, *su, "method", span, sub_span);
         return;
     }
 
     let sub_span = match sub_span {
         Some(sub_span) => sub_span,
         None => {
-            println!("(method_str) Could not find sub_span in `{}`", su.snippet(span));
+            su.report_span_err("method_str", span);
             return
         },
     };
@@ -445,42 +478,42 @@ fn method_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Sp
     });
 }
 
-fn method_decl_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, name: &str, scope_id: NodeId) {
+fn method_decl_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, name: &str, scope_id: NodeId) {
     if rec.dump_spans {
-        dump_span(rec, su, "method_decl", span, sub_span);
+        dump_span(rec, *su, "method_decl", span, sub_span);
         return;
     }
 
     match sub_span {
         Some(sub_span) => rec.record(format!("method_decl,{},qualname,\"{}\",id,{},scopeid,{}\n",
                                              su.extent_str(span, Some(sub_span)), escape(name), id, scope_id)),
-        None => println!("(method_decl_str) Could not find sub_span in `{}`", su.snippet(span)),
+        None => su.report_span_err("method_del_str", span),
     }
 }
 
-fn struct_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, ctor_id: NodeId, name: &str, val: &str, scope_id: NodeId) {
+fn struct_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, ctor_id: NodeId, name: &str, val: &str, scope_id: NodeId) {
     if rec.dump_spans {
-        dump_span(rec, su, "struct", span, sub_span);
+        dump_span(rec, *su, "struct", span, sub_span);
         return;
     }
 
     match sub_span {
         Some(sub_span) => rec.record(format!("struct,{},id,{},ctor_id,{},qualname,\"{}\",value,\"{}\",scopeid,{}\n",
                                              su.extent_str(span, Some(sub_span)), id, ctor_id, escape(name), escape(val), scope_id)),
-        None => println!("(struct_str) Could not find sub_span in `{}`", su.snippet(span)),
+        None => su.report_span_err("struct_str", span),
     }
 }
 
-fn trait_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, name: &str, scope_id: NodeId) {
+fn trait_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, name: &str, scope_id: NodeId) {
     if rec.dump_spans {
-        dump_span(rec, su, "trait", span, sub_span);
+        dump_span(rec, *su, "trait", span, sub_span);
         return;
     }
 
     match sub_span {
         Some(sub_span) => rec.record(format!("trait,{},id,{},qualname,\"{}\",scopeid,{}\n",
                                              su.extent_str(span, Some(sub_span)), id, escape(name), scope_id)),
-        None => println!("(trait_str) Could not find sub_span in `{}`", su.snippet(span)),
+        None => su.report_span_err("trait_str", span),
     }
 }
 
@@ -494,7 +527,7 @@ fn impl_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Span, id: N
                        su.extent_str(span, Some(sub_span)), id, ref_id.node, ref_id.krate, scope_id));
 }
 
-fn mod_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, name: &str, parent: NodeId, filename: &str) {
+fn mod_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, name: &str, parent: NodeId, filename: &str) {
     if rec.dump_spans {
         //dump_span(rec, su, "module", span, sub_span);
         return;
@@ -503,7 +536,7 @@ fn mod_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>
     match sub_span {
         Some(sub_span) => rec.record(format!("module,{},id,{},qualname,\"{}\",scopeid,{},def_file,{}\n",
                                              su.extent_str(span, Some(sub_span)), id, escape(name), parent, filename)),
-        None => println!("(mod_str) Could not find sub_span in `{}`", su.snippet(span)),
+        None => su.report_span_err("mod_str", span),
     }
 }
 
@@ -517,16 +550,16 @@ fn mod_alias_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Span, 
                        su.extent_str(span, Some(sub_span)), id, mod_id.node, mod_id.krate, name, parent));
 }
 
-fn extern_mod_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, cnum: ast::CrateNum, name: &str, loc: &str, parent: NodeId) {
+fn extern_mod_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, cnum: ast::CrateNum, name: &str, loc: &str, parent: NodeId) {
     if rec.dump_spans {
-        dump_span(rec, su, "extern_mod", span, sub_span);
+        dump_span(rec, *su, "extern_mod", span, sub_span);
         return;
     }
 
     match sub_span {
         Some(sub_span) => rec.record(format!("extern_mod,{},id,{},name,{},location,{},crate,{},scopeid,{}\n",
                                              su.extent_str(span, Some(sub_span)), id, name, loc, cnum, parent)),
-        None => println!("(extern_mod_str) Could not find sub_span in `{}`", su.snippet(span)),
+        None => su.report_span_err("extern_mod_str", span),
     }    
 }
 
@@ -550,9 +583,9 @@ fn fn_call_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Span, id
                        su.extent_str(span, Some(sub_span)), id.node, id.krate, scope_id));
 }
 
-fn meth_call_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, defid: DefId, declid: Option<DefId>, scope_id:NodeId) {
+fn meth_call_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span>, defid: DefId, declid: Option<DefId>, scope_id:NodeId) {
     if rec.dump_spans {
-        dump_span(rec, su, "method_call", span, sub_span);
+        dump_span(rec, *su, "method_call", span, sub_span);
         return;
     }
 
@@ -563,7 +596,7 @@ fn meth_call_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option
             None => format!("method_call,{},refid,{},refidcrate,{},scopeid,{}\n",
                 su.extent_str(span, Some(sub_span)), defid.node, defid.krate, scope_id),
         }),
-        None => println!("(meth_call_str) Could not find sub_span in `{}`", su.snippet(span)),
+        None => su.report_span_err("method_call_str", span),
     }    
 }
 
@@ -602,16 +635,16 @@ fn inherit_str(rec: &mut Recorder, _: SpanUtils, base_id: DefId, deriv_id: NodeI
                        base_id.node, base_id.krate, deriv_id));
 }
 
-fn typedef_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, qualname: &str, value: &str) {
+fn typedef_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, qualname: &str, value: &str) {
     if rec.dump_spans {
-        dump_span(rec, su, "typedef", span, sub_span);
+        dump_span(rec, *su, "typedef", span, sub_span);
         return;
     }
 
     match sub_span {
         Some(sub_span) => rec.record(format!("typedef,{},qualname,\"{}\",id,{},value,\"{}\"\n",
                                              su.extent_str(span, Some(sub_span)), escape(qualname), id, escape(value))),
-        None => println!("(typedef_str) Could not find sub_span in `{}`", su.snippet(span)),
+        None => su.report_span_err("typedef_str", span),
     }
 }
 
@@ -828,7 +861,7 @@ impl <'l> DxrVisitor<'l> {
 
         let sub_span = self.span.sub_span_after_keyword(method.span, keywords::Fn);
         method_str(self.recorder,
-                   self.span,
+                   &self.span,
                    method.span,
                    sub_span,
                    method.id,
@@ -854,7 +887,7 @@ impl <'l> DxrVisitor<'l> {
             ast::NamedField(ident, _) => {
                 let name = get_ident(ident).get().to_owned();
                 let qualname = qualname + "::" + name;
-                match self.span.sub_span_before_token(field.span, COLON) {
+                match self.span.sub_span_before_token(field.span, token::COLON) {
                     Some(sub_span) => field_str(self.recorder,
                                                 self.span,
                                                 field.span,
@@ -882,7 +915,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 let qualname = self.analysis.ty_cx.map.path_to_str_with_ident(item.id, item.ident);
 
                 let sub_span = self.span.sub_span_after_keyword(item.span, keywords::Fn);
-                fn_str(self.recorder, self.span, item.span, sub_span, item.id, qualname, e.cur_scope);
+                fn_str(self.recorder, &self.span, item.span, sub_span, item.id, qualname, e.cur_scope);
 
                 self.process_formals(decl, qualname, e);
 
@@ -907,7 +940,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
 
                 let sub_span = self.span.sub_span_after_keyword(item.span, keywords::Static);
                 static_str(self.recorder,
-                           self.span,
+                           &self.span,
                            item.span,
                            sub_span,
                            item.id,
@@ -921,6 +954,8 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 self.visit_expr(expr, e);
             },
             ast::ItemStruct(def, ref _g) => {
+                // TODO the ident appears to be repeated, we probably just need the path
+                // check other uses of path_to_str_with_ident
                 let qualname = self.analysis.ty_cx.map.path_to_str_with_ident(item.id, item.ident);
 
                 let ctor_id = match def.ctor_id {
@@ -929,7 +964,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 };
                 let sub_span = self.span.sub_span_after_keyword(item.span, keywords::Struct);
                 struct_str(self.recorder,
-                           self.span,
+                           &self.span,
                            item.span,
                            sub_span,
                            item.id,
@@ -1001,6 +1036,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 }
             },
             ast::ItemImpl(ref type_parameters, ref trait_ref, typ, ref methods) => {
+                println!("visiting impl {:?} {}", item.span, self.span.snippet(item.span));
                 match typ.node {
                     ast::TyPath(ref path, _, id) => {
                         match self.lookup_type_ref(id) {
@@ -1038,7 +1074,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 let qualname = self.analysis.ty_cx.map.path_to_str_with_ident(item.id, item.ident);
 
                 let sub_span = self.span.sub_span_after_keyword(item.span, keywords::Trait);
-                trait_str(self.recorder, self.span, item.span, sub_span, item.id, qualname, e.cur_scope);
+                trait_str(self.recorder, &self.span, item.span, sub_span, item.id, qualname, e.cur_scope);
 
                 // super-traits
                 for trait_ref in trait_refs.iter() {
@@ -1076,7 +1112,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
 
                 let sub_span = self.span.sub_span_after_keyword(item.span, keywords::Mod);
                 mod_str(self.recorder,
-                        self.span,
+                        &self.span,
                         item.span,
                         sub_span,
                         item.id,
@@ -1091,7 +1127,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 let value = ty_to_str(ty);
                 let sub_span = self.span.sub_span_after_keyword(item.span, keywords::Type);
                 typedef_str(self.recorder,
-                            self.span,
+                            &self.span,
                             item.span,
                             sub_span,
                             item.id,
@@ -1112,6 +1148,8 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
         if generated_code(s) {
             return;
         }
+
+        println!("visiting method {:?} {}", s, self.span.snippet(s));
         
         match *fk {
             visit::FkMethod(_, _, method) => self.process_method(method, e),
@@ -1122,6 +1160,10 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
     fn visit_trait_method(&mut self, tm: &ast::TraitMethod, e: DxrVisitorEnv) {
         match *tm {
             ast::Required(ref method_type) => {
+                if generated_code(method_type.span) {
+                    return;
+                }
+        
                 let mut scope_id = 0;
                 let qualname = match ty::trait_of_method(self.analysis.ty_cx, DefId{krate:0, node:method_type.id}) {
                     Some(def_id) => {
@@ -1144,7 +1186,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
 
                 let sub_span = self.span.sub_span_after_keyword(method_type.span, keywords::Fn);
                 method_decl_str(self.recorder,
-                                self.span,
+                                &self.span,
                                 method_type.span,
                                 sub_span,
                                 method_type.id,
@@ -1184,7 +1226,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
 
                             // 'use' always introduces a module alias, if there is not an explicit
                             // one, there is an implicit one.
-                            let sub_span = match self.span.sub_span_before_token(vp.span, EQ) {
+                            let sub_span = match self.span.sub_span_before_token(vp.span, token::EQ) {
                                 Some(sub_span) => sub_span,
                                 None => sub_span,
                             };
@@ -1220,14 +1262,14 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     Some((ref s, _)) => s.get().to_owned(),
                     None => name.to_owned(),
                 };
-                let sub_span = self.span.sub_span_after_keyword(i.span, keywords::Mod);
+                let sub_span = self.span.sub_span_after_keyword(i.span, keywords::Crate);
                 let cstore = self.analysis.ty_cx.cstore;
                 let cnum = match cstore.find_extern_mod_stmt_cnum(id) {
                     Some(cnum) => cnum,
                     None => 0,
                 };
                 extern_mod_str(self.recorder,
-                               self.span,
+                               &self.span,
                                i.span,
                                sub_span,
                                id,
@@ -1312,7 +1354,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                         } else {
                             DefId{krate:0,node:0}
                         };
-                        meth_call_str(self.recorder, self.span, ex.span, Some(sub_span), defid, Some(declid), e.cur_scope);
+                        meth_call_str(self.recorder, &self.span, ex.span, Some(sub_span), defid, Some(declid), e.cur_scope);
                     },
                     ast::DefFn(def_id, _) => fn_call_str(self.recorder,
                                                          self.span,
@@ -1359,6 +1401,9 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                         Some(struct_def) => {
                             let fields = ty::lookup_struct_fields(self.analysis.ty_cx, struct_def);
                             for f in fields.iter() {
+                                if generated_code(field.ident.span) {
+                                    continue;
+                                }
                                 if f.name == field.ident.node.name {
                                     // We don't really need a sub-span here, but no harm done
                                     let sub_span = self.span.span_for_last_ident(field.ident.span);
@@ -1379,26 +1424,26 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 match method_callee.origin {
                     typeck::MethodStatic(def_id) => {
                         // method invoked on a struct object (not a static method)
-                        let sub_span = self.span.sub_span_for_fn_name(ex.span);
+                        let sub_span = self.span.sub_span_for_meth_name(ex.span);
                         let declid = match ty::trait_method_of_method(self.analysis.ty_cx, def_id) {
                             Some(def_id) => Some(def_id),
                             None => None
                         };
-                        meth_call_str(self.recorder, self.span, ex.span, sub_span, def_id, declid, e.cur_scope);
+                        meth_call_str(self.recorder, &self.span, ex.span, sub_span, def_id, declid, e.cur_scope);
                     }
                     typeck::MethodParam(mp) => {
                         // method invoked on a type parameter
                         let method = ty::trait_method(self.analysis.ty_cx, mp.trait_id, mp.method_num);
-                        let sub_span = self.span.sub_span_for_fn_name(ex.span);
-                        meth_call_str(self.recorder, self.span, ex.span, sub_span, DefId{node:0,krate:0}, Some(method.def_id), e.cur_scope);
+                        let sub_span = self.span.sub_span_for_meth_name(ex.span);
+                        meth_call_str(self.recorder, &self.span, ex.span, sub_span, DefId{node:0,krate:0}, Some(method.def_id), e.cur_scope);
                     },
                     typeck::MethodObject(mo) => {
                         // method invoked on a trait instance
                         let method = ty::trait_method(self.analysis.ty_cx, mo.trait_id, mo.method_num);
-                        let sub_span = self.span.sub_span_for_fn_name(ex.span);
+                        let sub_span = self.span.sub_span_for_meth_name(ex.span);
                         // We don't know where object methods are defined since they are staticaly
                         // dispatched, so pass 0 as the definition id.
-                        meth_call_str(self.recorder, self.span, ex.span, sub_span, DefId{node:0,krate:0}, Some(method.def_id), e.cur_scope);
+                        meth_call_str(self.recorder, &self.span, ex.span, sub_span, DefId{node:0,krate:0}, Some(method.def_id), e.cur_scope);
                     },
                 }
 
@@ -1461,7 +1506,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 let struct_def = self.lookup_type_ref(p.id);
                 // the AST doesn't give us a span for the struct field, so we have
                 // to figure out where it is by assuming it's the token before each colon
-                let field_spans = self.span.all_sub_spans_before_token(p.span, COLON);
+                let field_spans = self.span.all_sub_spans_before_token(p.span, token::COLON);
                 if field_spans.len() > 0 {
                     let mut ns = 0;
                     for field in fields.iter() {
@@ -1614,6 +1659,10 @@ pub fn process_crate(sess: Session,
                      krate: &ast::Crate,
                      analysis: &CrateAnalysis,
                      odir: &Option<Path>) {
+    if generated_code(krate.span) {
+        return;
+    }
+
     // TODO need to stick a random number on the end or something incase there
     // are multiple unknown crates
     let (cratename, crateid) = match attr::find_crateid(krate.attrs) {
@@ -1665,8 +1714,8 @@ pub fn process_crate(sess: Session,
                                  collected_paths: ~[],
                                  recorder: ~Recorder{ out: output_file as ~Writer,
                                                       // TODO take this as a param or something
-                                                      dump_spans: true, },
-                                 span: SpanUtils{ code_map: sess.codemap}};
+                                                      dump_spans: false, },
+                                 span: SpanUtils{ code_map: sess.codemap, err_count: 0 }};
 
     visitor.dump_crate_info(cratename, krate);
 

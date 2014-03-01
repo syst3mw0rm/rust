@@ -21,6 +21,10 @@ pub fn expand_deriving_clone(cx: &mut ExtCtxt,
                              mitem: @MetaItem,
                              item: @Item,
                              push: |@Item|) {
+    match span.expn_info {
+        None => fail!("derived trait should have expn_info set"),
+        Some(_) => {},
+    }
     let trait_def = TraitDef {
         span: span,
         attributes: Vec::new(),
