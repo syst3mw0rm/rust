@@ -763,7 +763,6 @@ impl<'a> AstBuilder for ExtCtxt<'a> {
             name: Ident, attrs: Vec<ast::Attribute> , node: ast::Item_) -> @ast::Item {
         // FIXME: Would be nice if our generated code didn't violate
         // Rust coding conventions
-        assert!(span.expn_info.is_some());
         @ast::Item { ident: name,
                     attrs: attrs,
                     id: ast::DUMMY_NODE_ID,

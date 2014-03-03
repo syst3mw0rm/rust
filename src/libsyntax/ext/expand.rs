@@ -262,19 +262,20 @@ pub fn expand_item(it: @ast::Item, fld: &mut MacroExpander)
                         span: None
                     }
                 });
-                // we'd ideally decorator_items.push_all(expand_item(item, fld)),
-                // but that double-mut-borrows fld
+                // We'd ideally decorator_items.push_all(expand_item(item, fld)),
+                // but that double-mut-borrows fld.
+                let mut temp = SmallVector::zero();
                 dec_fn(fld.cx, attr.span, attr.node.value, it,
-                       |item| decorator_items.push(item));
+                       |item| temp.push(item));
+                decorator_items.push_all(temp.move_iter()
+                    .flat_map(|item| expand_item(item, fld).move_iter())
+                    .collect());
+
                 fld.cx.bt_pop();
             }
             _ => {}
         }
     }
-
-    let decorator_items = decorator_items.move_iter()
-        .flat_map(|item| expand_item(item, fld).move_iter())
-        .collect();
 
     let mut new_items = match it.node {
         ast::ItemMac(..) => expand_item_mac(it, fld),
@@ -291,6 +292,9 @@ pub fn expand_item(it: @ast::Item, fld: &mut MacroExpander)
     };
 
     new_items.push_all(decorator_items);
+    if new_items.len() == 1 {
+        debug!("nrc - new item - {:?}", new_items.get(0).span);
+    }
     new_items
 }
 

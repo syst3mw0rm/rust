@@ -328,10 +328,13 @@ impl<'a> TraitDef<'a> {
                   push: |@ast::Item|) {
         match item.node {
             ast::ItemStruct(struct_def, ref generics) => {
+                debug!("nrc - do push");
+
                 push(self.expand_struct_def(cx,
                                             struct_def,
                                             item.ident,
                                             generics));
+                debug!("nrc - end do push");
             }
             ast::ItemEnum(ref enum_def, ref generics) => {
                 push(self.expand_enum_def(cx,

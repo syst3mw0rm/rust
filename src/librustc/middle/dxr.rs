@@ -79,7 +79,8 @@ impl SpanUtils {
     // sub_span starts at span.lo, so we need to adjust the positions etc.
     // if sub_span is None, we don't need to adjust.
     fn extent_str(&self, span: Span, sub_span: Option<Span>) -> ~str {
-        assert!(!generated_code(span), "generated code; we should not be processing this");
+        // TODO put this assert back in
+        //assert!(!generated_code(span), "generated code; we should not be processing this");
 
         let base_loc = self.code_map.lookup_char_pos(span.lo);
         let base_pos: CharPos = self.code_map.bytepos_to_file_charpos(span.lo);
@@ -135,7 +136,7 @@ impl SpanUtils {
         // sadness - we don't have spans for sub-expressions nor access to the tokens
         // so in order to get extents for the function name itself (which dxr expects)
         // we need to re-tokenise the fn definition
-        let handler = diagnostic::mk_handler();
+        let handler = diagnostic::mk_handler(~diagnostic::EmitterWriter::stderr());
         let handler = diagnostic::mk_span_handler(handler, self.code_map);
 
         let filemap = self.code_map.new_filemap(~"<anon-dxr>",
@@ -1036,7 +1037,6 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 }
             },
             ast::ItemImpl(ref type_parameters, ref trait_ref, typ, ref methods) => {
-                println!("visiting impl {:?} {}", item.span, self.span.snippet(item.span));
                 match typ.node {
                     ast::TyPath(ref path, _, id) => {
                         match self.lookup_type_ref(id) {
@@ -1148,8 +1148,6 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
         if generated_code(s) {
             return;
         }
-
-        println!("visiting method {:?} {}", s, self.span.snippet(s));
         
         match *fk {
             visit::FkMethod(_, _, method) => self.process_method(method, e),
