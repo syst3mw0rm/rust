@@ -437,7 +437,7 @@ impl CodeMap {
         };
     }
 
-    fn lookup_byte_offset(&self, bpos: BytePos)
+    pub fn lookup_byte_offset(&self, bpos: BytePos)
         -> FileMapAndBytePos {
         let idx = self.lookup_filemap_idx(bpos);
         let files = self.files.borrow();
@@ -446,7 +446,7 @@ impl CodeMap {
         return FileMapAndBytePos {fm: fm, pos: offset};
     }
 
-    // Converts an absolute BytePos to a CharPos relative to the filemap.
+    // Converts an absolute BytePos to a CharPos relative to the filemap and above.
     pub fn bytepos_to_file_charpos(&self, bpos: BytePos) -> CharPos {
         debug!("codemap: converting {:?} to char pos", bpos);
         let idx = self.lookup_filemap_idx(bpos);
