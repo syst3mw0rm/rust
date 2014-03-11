@@ -613,7 +613,11 @@ impl Parser {
             token::GT => self.bump(),
             token::BINOP(token::SHR) => {
                 let lo = self.span.lo + BytePos(1);
-                self.replace_token(token::GT, lo, self.span.hi)
+                let last_lo = self.span.lo;
+                let last_hi = lo;
+                self.replace_token(token::GT, lo, self.span.hi);
+                // TODO should I factor this out? Are there other places it should be done? - yes, expect_or
+                self.last_span = mk_sp(last_lo, last_hi);
             }
             _ => {
                 let gt_str = Parser::token_to_str(&token::GT);

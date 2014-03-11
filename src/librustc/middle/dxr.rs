@@ -138,13 +138,28 @@ impl SpanUtils {
         let mut result = None;
 
         let toks = self.retokenise_span(span);
+        let mut bracket_count = 0;
         loop {
             let ts = toks.next_token();
             if ts.tok == token::EOF {
                 return self.make_sub_span(span, result)
             }
-            if is_ident(&ts.tok) || is_keyword(keywords::Self, &ts.tok) {
+            if bracket_count == 0 &&
+               (is_ident(&ts.tok) || is_keyword(keywords::Self, &ts.tok)) {
                 result = Some(ts.sp);
+            }
+
+            if ts.tok == token::LT {
+                bracket_count += 1;
+            }
+            if ts.tok == token::GT {
+                bracket_count -= 1;
+            }
+            if ts.tok == token::BINOP(token::SHL) {
+                bracket_count += 2;
+            }
+            if ts.tok == token::BINOP(token::SHR) {
+                bracket_count -= 2;
             }
         }
     }
@@ -152,13 +167,28 @@ impl SpanUtils {
     // Return the span for the first identifier in the path.
     fn span_for_first_ident(&self, span: Span) -> Option<Span> {
         let toks = self.retokenise_span(span);
+        let mut bracket_count = 0;
         loop {
             let ts = toks.next_token();
             if ts.tok == token::EOF {
                 return None;
             }
-            if is_ident(&ts.tok) || is_keyword(keywords::Self, &ts.tok) {
+            if bracket_count == 0 &&
+               (is_ident(&ts.tok) || is_keyword(keywords::Self, &ts.tok)) {
                 return self.make_sub_span(span, Some(ts.sp));
+            }
+
+            if ts.tok == token::LT {
+                bracket_count += 1;
+            }
+            if ts.tok == token::GT {
+                bracket_count -= 1;
+            }
+            if ts.tok == token::BINOP(token::SHL) {
+                bracket_count += 2;
+            }
+            if ts.tok == token::BINOP(token::SHR) {
+                bracket_count -= 2;
             }
         }
     }
@@ -590,16 +620,16 @@ fn mod_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span
     }
 }
 
-fn mod_alias_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, mod_id: DefId, name: &str, parent: NodeId) {
+fn use_alias_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, id: NodeId, mod_id: DefId, name: &str, parent: NodeId) {
     if rec.dump_spans {
-        dump_span(rec, su, "mod_alias", span, sub_span);
+        dump_span(rec, su, "use_alias", span, sub_span);
         return;
     }
 
     match sub_span {
-        Some(sub_span) => rec.record(format!("module_alias,{},id,{},refid,{},refidcrate,{},name,{},scopeid,{}\n",
+        Some(sub_span) => rec.record(format!("use_alias,{},id,{},refid,{},refidcrate,{},name,{},scopeid,{}\n",
                        su.extent_str(sub_span), id, mod_id.node, mod_id.krate, name, parent)),
-        None => su.report_span_err("mod_alias_str", span),
+        None => su.report_span_err("use_alias_str", span),
     }
 }
 
@@ -616,16 +646,16 @@ fn extern_mod_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Opti
     }    
 }
 
-fn ref_str(rec: &mut Recorder, su: SpanUtils, kind: &str, span: Span, sub_span: Option<Span>, id: DefId) {
+fn ref_str(rec: &mut Recorder, su: SpanUtils, kind: &str, span: Span, sub_span: Option<Span>, id: DefId, scope_id: NodeId) {
     if rec.dump_spans {
         dump_span(rec, su, kind, span, sub_span);
         return;
     }
 
     match sub_span {
-        Some(sub_span) => rec.record(format!("{},{},refid,{},refidcrate,{}\n",
-                       kind, su.extent_str(sub_span), id.node, id.krate)),
-        None => su.report_span_err("ref_str", span),
+        Some(sub_span) => rec.record(format!("{},{},refid,{},refidcrate,{},qualname,,scopeid,{}\n",
+                       kind, su.extent_str(sub_span), id.node, id.krate, scope_id)),
+        None => su.report_span_err("ref_str: " + kind, span),
     }
 }
 
@@ -642,7 +672,7 @@ fn fn_call_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<S
     }
 }
 
-fn meth_call_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span>, defid: DefId, declid: Option<DefId>, scope_id:NodeId) {
+fn meth_call_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Option<Span>, defid: DefId, declid: Option<DefId>, scope_id: NodeId) {
     if rec.dump_spans {
         dump_span(rec, *su, "method_call", span, sub_span);
         return;
@@ -657,20 +687,6 @@ fn meth_call_str(rec: &mut Recorder, su: &SpanUtils, span: Span, sub_span: Optio
         }),
         None => su.report_span_err("method_call_str", span),
     }    
-}
-
-fn mod_ref_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Option<Span>, id: DefId, parent:NodeId) {
-    if rec.dump_spans {
-        dump_span(rec, su, "mod_ref", span, sub_span);
-        return;
-    }
-
-    let span = match sub_span {
-        Some(ss) => ss,
-        None => span,
-    };
-    rec.record(format!("mod_ref,{},refid,{},refidcrate,{},qualname,,scopeid,{}\n",
-                       su.extent_str(span), id.node, id.krate, parent));
 }
 
 fn sub_mod_ref_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Span, qualname: &str, parent:NodeId) {
@@ -694,6 +710,7 @@ fn sub_type_ref_str(rec: &mut Recorder, su: SpanUtils, span: Span, sub_span: Spa
 }
 
 fn inherit_str(rec: &mut Recorder, _: SpanUtils, base_id: DefId, deriv_id: NodeId) {
+    // TODO add extent string here for consistency
     rec.record(format!("inheritance,base,{},basecrate,{},derived,{},derivedcrate,0\n",
                        base_id.node, base_id.krate, deriv_id));
 }
@@ -776,7 +793,7 @@ impl <'l> DxrVisitor<'l> {
 
         let mut result = ~[];
         for i in range(0, path.segments.len()) {
-            let mut segs = path.segments.to_owned();
+            let mut segs = path.segments.clone();
             segs.truncate(i+1);
             let sub_path = ast::Path{span: spans[i], // span for the last segment
                                      global: path.global,
@@ -845,6 +862,44 @@ impl <'l> DxrVisitor<'l> {
         match def {
             ast::DefPrimTy(_) => None,
             _ => Some(ast_util::def_id_of_def(def)),
+        }
+    }
+
+    // TODO var, type, struct, mod
+    fn lookup_def_str(&self, ref_id: NodeId) -> Option<&'static str> {
+        let def_map = self.analysis.ty_cx.def_map.borrow();
+        if !def_map.get().contains_key(&ref_id) {
+            println!("def_map has no key for {} in lookup_type_ref", ref_id);
+            return None;
+        }
+        let def = *def_map.get().get(&ref_id);
+        match def {
+            ast::DefMod(_) |
+            ast::DefForeignMod(_) => Some("mod_ref"),
+            ast::DefStruct(_) => Some("struct_ref"),
+            ast::DefTy(_) |
+            ast::DefTrait(_) => Some("type_ref"),
+            ast::DefStatic(_, _) |
+            ast::DefBinding(_, _) |
+            ast::DefArg(_, _) |
+            ast::DefLocal(_, _) |
+            ast::DefVariant(_, _, _) |
+            ast::DefUpvar(_, _, _, _) => Some("var_ref"),
+
+            ast::DefFn(_, _) => Some("fn_ref"),
+
+            ast::DefSelfTy(_) |
+            ast::DefRegion(_) |
+            ast::DefTyParamBinder(_) |
+            ast::DefLabel(_) |
+            ast::DefStaticMethod(_, _, _) |
+            ast::DefTyParam(_, _) |
+            ast::DefUse(_) | 
+            ast::DefMethod(_, _) |
+            ast::DefPrimTy(_) => {
+                println!("lookup_def_str for unexpected item: {:?}", def);
+                None
+            },
         }
     }
 
@@ -1019,8 +1074,6 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 self.visit_expr(expr, e);
             },
             ast::ItemStruct(def, ref _g) => {
-                // TODO the ident appears to be repeated, we probably just need the path
-                // check other uses of path_to_str_with_ident
                 let qualname = self.analysis.ty_cx.map.path_to_str(item.id);
 
                 let ctor_id = match def.ctor_id {
@@ -1106,7 +1159,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                         match self.lookup_type_ref(id) {
                             Some(id) => {
                                 let sub_span = self.span.sub_span_for_type_name(path.span);
-                                ref_str(self.recorder, self.span, "type_ref", path.span, sub_span, id);
+                                ref_str(self.recorder, self.span, "type_ref", path.span, sub_span, id, e.cur_scope);
                                 impl_str(self.recorder, self.span, path.span, sub_span, item.id, id, e.cur_scope);
                             },
                             None => ()
@@ -1120,7 +1173,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                         match self.lookup_type_ref(trait_ref.ref_id) {
                             Some(id) => {
                                 let sub_span = self.span.sub_span_for_type_name(trait_ref.path.span);
-                                ref_str(self.recorder, self.span, "type_ref", trait_ref.path.span, sub_span, id);
+                                ref_str(self.recorder, self.span, "type_ref", trait_ref.path.span, sub_span, id, e.cur_scope);
                                 impl_str(self.recorder, self.span, trait_ref.path.span, sub_span, item.id, id, e.cur_scope);
                             },
                             None => ()
@@ -1145,7 +1198,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     match self.lookup_type_ref(trait_ref.ref_id) {
                         Some(id) => {
                             let sub_span = self.span.sub_span_for_type_name(trait_ref.path.span);
-                            ref_str(self.recorder, self.span, "type_ref", trait_ref.path.span, sub_span, id);
+                            ref_str(self.recorder, self.span, "type_ref", trait_ref.path.span, sub_span, id, e.cur_scope);
                             inherit_str(self.recorder, self.span, id, item.id);
                         },
                         None => ()
@@ -1169,7 +1222,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 // the current file for consistency.
                 let cm = self.sess.codemap;
                 let filename = if m.items.len() > 0 {
-                    cm.span_to_filename(m.items[0].span)
+                    cm.span_to_filename(m.items.get(0).span)
                 } else {
                     cm.span_to_filename(item.span)
                 };
@@ -1279,25 +1332,36 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                         ast::ViewPathSimple(ident, ref path, id) => {
                             let sub_span = self.span.span_for_last_ident(vp.span);
                             let mod_id = match self.lookup_type_ref(id) {
-                                Some(id) => {
-                                    mod_ref_str(self.recorder, self.span, vp.span, sub_span, id, e.cur_scope);
-                                    id
+                                Some(def_id) => {
+                                    match self.lookup_def_str(id) {
+                                        Some(kind) => ref_str(self.recorder,
+                                                              self.span,
+                                                              kind,
+                                                              vp.span,
+                                                              sub_span,
+                                                              def_id,
+                                                              e.cur_scope),
+                                        None() => (),
+                                    }
+                                    def_id
                                 },
                                 None => DefId{node:0, krate:0},
                             };
 
-                            // 'use' always introduces a module alias, if there is not an explicit
+                            // 'use' always introduces an alias, if there is not an explicit
                             // one, there is an implicit one.
+                            // TODO and it is broken unless it is to a module
                             let sub_span = match self.span.sub_span_before_token(vp.span, token::EQ) {
                                 Some(sub_span) => Some(sub_span),
                                 None => sub_span,
                             };
 
-                            mod_alias_str(self.recorder,
+                            use_alias_str(self.recorder,
                                           self.span,
                                           vp.span,
                                           sub_span,
-                                          id, mod_id,
+                                          id,
+                                          mod_id,
                                           get_ident(ident).get(),
                                           e.cur_scope);
                             self.write_sub_paths_truncated(path, e.cur_scope);
@@ -1308,7 +1372,16 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                         ast::ViewPathList(ref path, ref list, _) => {
                             for plid in list.iter() {
                                 match self.lookup_type_ref(plid.node.id) {
-                                    Some(id) => mod_ref_str(self.recorder, self.span, plid.span, None, id, e.cur_scope),
+                                    Some(id) => match self.lookup_def_str(plid.node.id) {
+                                        Some(kind) => ref_str(self.recorder,
+                                                              self.span,
+                                                              kind,
+                                                              plid.span,
+                                                              Some(plid.span),
+                                                              id,
+                                                              e.cur_scope),
+                                        None => (),
+                                    },
                                     None => ()
                                 }
                             }
@@ -1353,7 +1426,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 match self.lookup_type_ref(id) {
                     Some(id) => {
                         let sub_span = self.span.sub_span_for_type_name(t.span);
-                        ref_str(self.recorder, self.span, "type_ref", t.span, sub_span, id);
+                        ref_str(self.recorder, self.span, "type_ref", t.span, sub_span, id, e.cur_scope);
                     },
                     None => ()
                 }
@@ -1396,9 +1469,9 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     ast::DefLocal(id, _) |
                     ast::DefArg(id, _) |
                     ast::DefUpvar(id, _, _, _) |
-                    ast::DefBinding(id, _) => ref_str(self.recorder, self.span, "var_ref", ex.span, sub_span, DefId{node:id, krate:0}),
-                    ast::DefStatic(def_id,_) => ref_str(self.recorder, self.span, "var_ref", ex.span, sub_span, def_id),
-                    ast::DefStruct(def_id) => ref_str(self.recorder, self.span, "struct_ref", ex.span, sub_span, def_id),
+                    ast::DefBinding(id, _) => ref_str(self.recorder, self.span, "var_ref", ex.span, sub_span, DefId{node:id, krate:0}, e.cur_scope),
+                    ast::DefStatic(def_id,_) => ref_str(self.recorder, self.span, "var_ref", ex.span, sub_span, def_id, e.cur_scope),
+                    ast::DefStruct(def_id) => ref_str(self.recorder, self.span, "struct_ref", ex.span, sub_span, def_id, e.cur_scope),
                     ast::DefStaticMethod(declid, provenence, _) => {
                         let defid = if declid.krate == ast::LOCAL_CRATE {
                             let methods = self.analysis.ty_cx.methods.borrow();
@@ -1439,7 +1512,8 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                                                  "var_ref",
                                                                  ex.span,
                                                                  sub_span,
-                                                                 variant_id),
+                                                                 variant_id,
+                                                                 e.cur_scope),
                     _ => println!("Unexpected def kind while looking up path in '{}'", self.span.snippet(ex.span)),
                 }
                 // modules or types in the path prefix
@@ -1465,7 +1539,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                     Some(id) => {
                         struct_def = Some(id);
                         let sub_span = self.span.span_for_last_ident(path.span);
-                        ref_str(self.recorder, self.span, "struct_ref", path.span, sub_span, id);
+                        ref_str(self.recorder, self.span, "struct_ref", path.span, sub_span, id, e.cur_scope);
                     },
                     None => ()
                 }
@@ -1483,7 +1557,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                 if f.name == field.ident.node.name {
                                     // We don't really need a sub-span here, but no harm done
                                     let sub_span = self.span.span_for_last_ident(field.ident.span);
-                                    ref_str(self.recorder, self.span, "var_ref", field.ident.span, sub_span, f.id);
+                                    ref_str(self.recorder, self.span, "var_ref", field.ident.span, sub_span, f.id, e.cur_scope);
                                 }
                             }
                         },
@@ -1524,7 +1598,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                 }
 
                 // walk receiver and args
-                visit::walk_exprs(self, *args, e);
+                visit::walk_exprs(self, args.as_slice(), e);
 
                 // TODO type params
             },
@@ -1545,7 +1619,7 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                         for f in fields.iter() {
                             if f.name == ident.name {
                                 let sub_span = self.span.span_for_last_ident(ex.span);
-                                ref_str(self.recorder, self.span, "var_ref", ex.span, sub_span, f.id);
+                                ref_str(self.recorder, self.span, "var_ref", ex.span, sub_span, f.id, e.cur_scope);
                             }
                         }
                     },
@@ -1604,7 +1678,8 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                                 "var_ref",
                                                 p.span,
                                                 Some(field_spans[ns]),
-                                                f.id);
+                                                f.id,
+                                                e.cur_scope);
                                     }
                                 }
                             },
@@ -1677,12 +1752,13 @@ impl<'l> Visitor<DxrVisitorEnv> for DxrVisitor<'l> {
                                                    ref_kind,
                                                    p.span,
                                                    sub_span,
-                                                   id),
+                                                   id,
+                                                   e.cur_scope),
                 _ => (),
             }
         }
         visit::walk_expr_opt(self, arm.guard, e);
-        self.visit_block(arm.body, e);
+        self.visit_expr(arm.body, e);
     }
  
     fn visit_stmt(&mut self, s:&ast::Stmt, e:DxrVisitorEnv) {
@@ -1749,7 +1825,7 @@ pub fn process_crate(sess: Session,
 
     // TODO need to stick a random number on the end or something incase there
     // are multiple unknown crates
-    let (cratename, crateid) = match attr::find_crateid(krate.attrs) {
+    let (cratename, crateid) = match attr::find_crateid(krate.attrs.as_slice()) {
         Some(crateid) => (crateid.name.clone(), crateid.to_str()),
         None => (~"unknown_crate",~"unknown_crate"),
     };
