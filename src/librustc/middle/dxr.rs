@@ -252,7 +252,8 @@ impl SpanUtils {
         loop {
             let next = toks.next_token();
 
-            if next.tok == token::LT &&
+            if (next.tok == token::LT ||
+                next.tok == token::COLON) &&
                bracket_count == 0 &&
                is_ident(&prev.tok) {
                 result = Some(prev.sp);
@@ -281,7 +282,7 @@ impl SpanUtils {
             println!("Mis-counted brackets when breaking path? Parsing '{}' in {}, line {}",
                      self.snippet(span), loc.file.name, loc.line);
         }
-        if is_ident(&prev.tok) && bracket_count == 0 {
+        if result.is_none() && is_ident(&prev.tok) && bracket_count == 0 {
             return self.make_sub_span(span, Some(prev.sp));
         }
         self.make_sub_span(span, result)
